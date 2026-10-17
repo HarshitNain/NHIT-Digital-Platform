@@ -1,0 +1,867 @@
+//go:build legacy_greennote_rich_api
+// +build legacy_greennote_rich_api
+
+package sqlc
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"strconv"
+	"time"
+
+	greennotepb "nhit-note/api/pb/greennotepb"
+	sqlcgen "nhit-note/services/greennote-service/internal/adapters/repository/sqlc/generated"
+	"nhit-note/services/greennote-service/internal/core/ports"
+)
+
+// Repository is a Postgres/sqlc-backed implementation of GreenNoteRepository.
+type LegacyRepository struct {
+	db   *sql.DB
+	q    *sqlcgen.Queries
+	docs ports.DocumentStorage
+}
+
+// NewPostgresGreenNoteRepository constructs a repository using a live *sql.DB
+// and the provided DocumentStorage for binary document content.
+func NewLegacyPostgresGreenNoteRepository(db *sql.DB, docs ports.DocumentStorage) *LegacyRepository {
+	return &LegacyRepository{db: db, q: sqlcgen.New(db), docs: docs}
+}
+
+func (r *LegacyRepository) List(ctx context.Context, req *greennotepb.ListGreenNotesRequest, orgID, tenantID string) (*greennotepb.ListGreenNotesResponse, error) {
+	statusFilter := req.GetStatus()
+	if statusFilter == "" && !req.GetIncludeAll() {
+		statusFilter = "S"
+	}
+
+	page := req.GetPage()
+	perPage := req.GetPerPage()
+	if page <= 0 {
+		page = 1
+	}
+	if perPage <= 0 {
+		perPage = 20
+	}
+	offset := (page - 1) * perPage
+
+	// Total count for pagination.
+	var totalItems int64
+	if err := r.db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM green_notes WHERE ($1 = '' OR status = $1)",
+		statusFilter,
+	).Scan(&totalItems); err != nil {
+		return nil, err
+	}
+
+	rows, err := r.q.ListGreenNotesBasic(ctx, sqlcgen.ListGreenNotesBasicParams{
+		Column1: statusFilter,
+		Limit:   int32(perPage),
+		Offset:  int32(offset),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	summaries := make([]*greennotepb.GreenNoteSummary, 0, len(rows))
+	for _, n := range rows {
+		invoiceValue := parseDecimal(n.InvoiceValueTotal)
+		summaries = append(summaries, &greennotepb.GreenNoteSummary{
+			Id:           n.ID,
+			OrderNo:      n.OrderNo,
+			Status:       n.Status,
+			InvoiceValue: invoiceValue,
+			CreatedAt:    n.CreatedAt.Format(time.RFC3339),
+		})
+	}
+
+	var totalPages int32
+	if perPage > 0 {
+		pages := totalItems / int64(perPage)
+		if totalItems%int64(perPage) != 0 {
+			pages++
+		}
+		totalPages = int32(pages)
+	}
+
+	return &greennotepb.ListGreenNotesResponse{
+		Notes: summaries,
+		Pagination: &greennotepb.Pagination{
+			Page:       page,
+			PerPage:    perPage,
+			TotalItems: totalItems,
+			TotalPages: totalPages,
+		},
+	}, nil
+}
+
+func (r *LegacyRepository) Get(ctx context.Context, id string) (*greennotepb.GreenNote, error) {
+	n, err := r.q.GetGreenNoteByID(ctx, id)
+	if err == sql.ErrNoRows {
+		return nil, ports.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	invoices, err := r.q.ListInvoicesByNoteID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	docs, err := r.listDocumentsByNoteID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	return dbNoteToProto(n, invoices, docs), nil
+}
+
+func (r *LegacyRepository) Create(ctx context.Context, payload *greennotepb.GreenNotePayload, orgID, tenantID string) (*greennotepb.GreenNote, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	qtx := r.q.WithTx(tx)
+
+	invBase, invGst, invOther, invTotal := sumInvoiceInputs(payload.GetInvoices())
+
+	params := buildCreateParams(payload, invBase, invGst, invOther, invTotal)
+	noteRow, err := qtx.CreateGreenNote(ctx, params)
+	if err != nil {
+		_ = tx.Rollback()
+		return nil, err
+	}
+
+	var dbInvoices []sqlcgen.GreenNoteInvoice
+	for _, in := range payload.GetInvoices() {
+		invRow, err := qtx.InsertInvoice(ctx, sqlcgen.InsertInvoiceParams{
+			GreenNoteID:         noteRow.ID,
+			InvoiceNumber:       in.GetInvoiceNumber(),
+			InvoiceDate:         toNullString(in.GetInvoiceDate()),
+			InvoiceBaseValue:    formatDecimal(in.GetInvoiceBaseValue()),
+			InvoiceGst:          formatDecimal(in.GetInvoiceGst()),
+			InvoiceOtherCharges: formatDecimal(in.GetInvoiceOtherCharges()),
+			InvoiceValue:        formatDecimal(in.GetInvoiceValue()),
+			Description:         toNullString(in.GetDescription()),
+		})
+		if err != nil {
+			_ = tx.Rollback()
+			return nil, err
+		}
+		dbInvoices = append(dbInvoices, invRow)
+	}
+
+	dbDocs, err := r.insertDocumentsTx(ctx, qtx, noteRow.ID, payload.GetSupportingDocuments())
+	if err != nil {
+		_ = tx.Rollback()
+		return nil, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+
+	return dbNoteToProto(noteRow, dbInvoices, dbDocs), nil
+}
+
+func (r *LegacyRepository) Update(ctx context.Context, id int64, payload *greennotepb.GreenNotePayload) (*greennotepb.GreenNote, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	qtx := r.q.WithTx(tx)
+
+	// Ensure note exists
+	_, err = qtx.GetGreenNoteByID(ctx, id)
+	if err == sql.ErrNoRows {
+		_ = tx.Rollback()
+		return nil, ports.ErrNotFound
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return nil, err
+	}
+
+	invBase, invGst, invOther, invTotal := sumInvoiceInputs(payload.GetInvoices())
+
+	// Update scalar fields and aggregates.
+	_, err = tx.ExecContext(ctx, `
+		UPDATE green_notes SET
+			order_no = $1,
+			order_date = $2,
+			user_id = $3,
+			vendor_id = $4,
+			department_id = $5,
+			base_value = $6,
+			gst = $7,
+			other_charges = $8,
+			total_amount = $9,
+			supplier_id = $10,
+			msme_classification = $11,
+			activity_type = $12,
+			protest_note_raised = $13,
+			brief_of_goods_services = $14,
+			delayed_damages = $15,
+			contract_start_date = $16,
+			contract_end_date = $17,
+			appointed_start_date = $18,
+			supply_period_start = $19,
+			supply_period_end = $20,
+			whether_contract = $21,
+			extension_contract_period = $22,
+			approval_for = $23,
+			budget_expenditure = $24,
+			actual_expenditure = $25,
+			expenditure_over_budget = $26,
+			nature_of_expenses = $27,
+			documents_workdone_supply = $28,
+			documents_discrepancy = $29,
+			amount_submission_non = $30,
+			remarks = $31,
+			auditor_remarks = $32,
+			required_submitted = $33,
+			expense_amount_within_contract = $34,
+			milestone_status = $35,
+			milestone_remarks = $36,
+			specify_deviation = $37,
+			deviations = $38,
+			status = $39,
+			enable_multiple_invoices = $40,
+			invoice_base_total = $41,
+			invoice_gst_total = $42,
+			invoice_other_charges_total = $43,
+			invoice_value_total = $44,
+			updated_at = NOW()
+		WHERE id = $45
+	`,
+		payload.GetOrderNo(),
+		toNullString(payload.GetOrderDate()),
+		payload.GetUserId(),
+		payload.GetVendorId(),
+		payload.GetDepartmentId(),
+		formatDecimal(payload.GetBaseValue()),
+		formatDecimal(payload.GetGst()),
+		formatDecimal(payload.GetOtherCharges()),
+		formatDecimal(payload.GetTotalAmount()),
+		toNullString(payload.GetSupplierId()),
+		toNullString(payload.GetMsmeClassification()),
+		toNullString(payload.GetActivityType()),
+		toNullString(payload.GetProtestNoteRaised()),
+		toNullString(payload.GetBriefOfGoodsServices()),
+		toNullString(payload.GetDelayedDamages()),
+		toNullString(payload.GetContractStartDate()),
+		toNullString(payload.GetContractEndDate()),
+		toNullString(payload.GetAppointedStartDate()),
+		toNullString(payload.GetSupplyPeriodStart()),
+		toNullString(payload.GetSupplyPeriodEnd()),
+		toNullString(payload.GetWhetherContract()),
+		toNullString(payload.GetExtensionContractPeriod()),
+		toNullString(payload.GetApprovalFor()),
+		toNullString(payload.GetBudgetExpenditure()),
+		toNullString(payload.GetActualExpenditure()),
+		toNullString(payload.GetExpenditureOverBudget()),
+		toNullString(payload.GetNatureOfExpenses()),
+		toNullString(payload.GetDocumentsWorkdoneSupply()),
+		toNullString(payload.GetDocumentsDiscrepancy()),
+		toNullString(payload.GetAmountSubmissionNon()),
+		toNullString(payload.GetRemarks()),
+		toNullString(payload.GetAuditorRemarks()),
+		toNullString(payload.GetRequiredSubmitted()),
+		toNullString(payload.GetExpenseAmountWithinContract()),
+		toNullString(payload.GetMilestoneStatus()),
+		toNullString(payload.GetMilestoneRemarks()),
+		toNullString(payload.GetSpecifyDeviation()),
+		toNullString(payload.GetDeviations()),
+		payload.GetStatus(),
+		payload.GetEnableMultipleInvoices(),
+		formatDecimal(invBase),
+		formatDecimal(invGst),
+		formatDecimal(invOther),
+		formatDecimal(invTotal),
+		id,
+	)
+	if err != nil {
+		_ = tx.Rollback()
+		return nil, err
+	}
+
+	// Replace invoices if provided.
+	if len(payload.GetInvoices()) > 0 {
+		if err := qtx.DeleteInvoicesForNote(ctx, id); err != nil {
+			_ = tx.Rollback()
+			return nil, err
+		}
+		var dbInvoices []sqlcgen.GreenNoteInvoice
+		for _, in := range payload.GetInvoices() {
+			invRow, err := qtx.InsertInvoice(ctx, sqlcgen.InsertInvoiceParams{
+				GreenNoteID:         id,
+				InvoiceNumber:       in.GetInvoiceNumber(),
+				InvoiceDate:         toNullString(in.GetInvoiceDate()),
+				InvoiceBaseValue:    formatDecimal(in.GetInvoiceBaseValue()),
+				InvoiceGst:          formatDecimal(in.GetInvoiceGst()),
+				InvoiceOtherCharges: formatDecimal(in.GetInvoiceOtherCharges()),
+				InvoiceValue:        formatDecimal(in.GetInvoiceValue()),
+				Description:         toNullString(in.GetDescription()),
+			})
+			if err != nil {
+				_ = tx.Rollback()
+				return nil, err
+			}
+			dbInvoices = append(dbInvoices, invRow)
+		}
+		// Load documents for mapping.
+		dbDocs, err := r.listDocumentsByNoteIDTx(ctx, tx, id)
+		if err != nil {
+			_ = tx.Rollback()
+			return nil, err
+		}
+
+		noteRow, err := qtx.GetGreenNoteByID(ctx, id)
+		if err != nil {
+			_ = tx.Rollback()
+			return nil, err
+		}
+
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+		return dbNoteToProto(noteRow, dbInvoices, dbDocs), nil
+	}
+
+	// No invoice changes; just reload note & invoices.
+	noteRow, err := qtx.GetGreenNoteByID(ctx, id)
+	if err != nil {
+		_ = tx.Rollback()
+		return nil, err
+	}
+	invoices, err := qtx.ListInvoicesByNoteID(ctx, id)
+	if err != nil {
+		_ = tx.Rollback()
+		return nil, err
+	}
+	docs, err := r.listDocumentsByNoteIDTx(ctx, tx, id)
+	if err != nil {
+		_ = tx.Rollback()
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+
+	return dbNoteToProto(noteRow, invoices, docs), nil
+}
+
+func (r *LegacyRepository) Update(ctx context.Context, id string, payload *greennotepb.GreenNotePayload, orgID, tenantID string) error {
+	return nil // Legacy implementation
+}
+
+func (r *LegacyRepository) Cancel(ctx context.Context, id string, reason string, orgID, tenantID string) error {
+	return nil // Legacy implementation
+}
+
+func (r *LegacyRepository) Delete(ctx context.Context, id int64) error {
+	if err := r.q.DeleteGreenNote(ctx, id); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (r *LegacyRepository) PutOnHold(ctx context.Context, id int64, holdReason string) (*greennotepb.GreenNote, error) {
+	_, err := r.db.ExecContext(ctx,
+		"UPDATE green_notes SET is_on_hold = TRUE, hold_reason = $1, hold_applied_at = NOW(), updated_at = NOW() WHERE id = $2",
+		holdReason,
+		id,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return r.Get(ctx, id)
+}
+
+func (r *LegacyRepository) RemoveFromHold(ctx context.Context, id int64, newStatus string) (*greennotepb.GreenNote, error) {
+	_, err := r.db.ExecContext(ctx,
+		"UPDATE green_notes SET is_on_hold = FALSE, status = $1, updated_at = NOW() WHERE id = $2",
+		newStatus,
+		id,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return r.Get(ctx, id)
+}
+
+func (r *LegacyRepository) UpdateInvoices(ctx context.Context, id int64, invoices []*greennotepb.InvoiceInput) (*greennotepb.GreenNote, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	qtx := r.q.WithTx(tx)
+
+	if err := qtx.DeleteInvoicesForNote(ctx, id); err != nil {
+		_ = tx.Rollback()
+		return nil, err
+	}
+
+	invBase, invGst, invOther, invTotal := sumInvoiceInputs(invoices)
+
+	var dbInvoices []sqlcgen.GreenNoteInvoice
+	for _, in := range invoices {
+		invRow, err := qtx.InsertInvoice(ctx, sqlcgen.InsertInvoiceParams{
+			GreenNoteID:         id,
+			InvoiceNumber:       in.GetInvoiceNumber(),
+			InvoiceDate:         toNullString(in.GetInvoiceDate()),
+			InvoiceBaseValue:    formatDecimal(in.GetInvoiceBaseValue()),
+			InvoiceGst:          formatDecimal(in.GetInvoiceGst()),
+			InvoiceOtherCharges: formatDecimal(in.GetInvoiceOtherCharges()),
+			InvoiceValue:        formatDecimal(in.GetInvoiceValue()),
+			Description:         toNullString(in.GetDescription()),
+		})
+		if err != nil {
+			_ = tx.Rollback()
+			return nil, err
+		}
+		dbInvoices = append(dbInvoices, invRow)
+	}
+
+	_, err = tx.ExecContext(ctx,
+		"UPDATE green_notes SET invoice_base_total = $1, invoice_gst_total = $2, invoice_other_charges_total = $3, invoice_value_total = $4, updated_at = NOW() WHERE id = $5",
+		formatDecimal(invBase),
+		formatDecimal(invGst),
+		formatDecimal(invOther),
+		formatDecimal(invTotal),
+		id,
+	)
+	if err != nil {
+		_ = tx.Rollback()
+		return nil, err
+	}
+
+	noteRow, err := qtx.GetGreenNoteByID(ctx, id)
+	if err != nil {
+		_ = tx.Rollback()
+		return nil, err
+	}
+	docs, err := r.listDocumentsByNoteIDTx(ctx, tx, id)
+	if err != nil {
+		_ = tx.Rollback()
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+
+	return dbNoteToProto(noteRow, dbInvoices, docs), nil
+}
+
+func (r *LegacyRepository) GetInvoiceSummary(ctx context.Context, id int64) (*greennotepb.InvoiceSummaryResponse, error) {
+	invoices, err := r.q.ListInvoicesByNoteID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	var total float64
+	protoInvoices := make([]*greennotepb.Invoice, 0, len(invoices))
+	for _, in := range invoices {
+		base := parseDecimal(in.InvoiceBaseValue)
+		gst := parseDecimal(in.InvoiceGst)
+		other := parseDecimal(in.InvoiceOtherCharges)
+		value := parseDecimal(in.InvoiceValue)
+		total += value
+		protoInvoices = append(protoInvoices, &greennotepb.Invoice{
+			Id:                  in.ID,
+			InvoiceNumber:       in.InvoiceNumber,
+			InvoiceDate:         in.InvoiceDate.String,
+			InvoiceBaseValue:    base,
+			InvoiceGst:          gst,
+			InvoiceOtherCharges: other,
+			InvoiceValue:        value,
+			Description:         in.Description.String,
+		})
+	}
+
+	return &greennotepb.InvoiceSummaryResponse{
+		Success: true,
+		Message: "ok",
+		Data: &greennotepb.InvoiceSummary{
+			TotalInvoices: int32(len(protoInvoices)),
+			TotalValue:    total,
+			Invoices:      protoInvoices,
+		},
+	}, nil
+}
+
+func (r *LegacyRepository) ApproveWithPaymentNote(ctx context.Context, id int64, comments string) (*greennotepb.GreenNote, *greennotepb.PaymentNoteDraft, error) {
+	_, err := r.db.ExecContext(ctx,
+		"UPDATE green_notes SET status = 'A', updated_at = NOW() WHERE id = $1",
+		id,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	note, err := r.Get(ctx, id)
+	if err != nil {
+		if err == ports.ErrNotFound {
+			return nil, nil, err
+		}
+		return nil, nil, err
+	}
+
+	gross := note.GetInvoiceValueTotal()
+	draft := &greennotepb.PaymentNoteDraft{
+		Id:          note.GetId(),
+		NoteNo:      fmt.Sprintf("PN-%s", note.GetOrderNo()),
+		Status:      "D",
+		GrossAmount: gross,
+	}
+
+	return note, draft, nil
+}
+
+func (r *LegacyRepository) GenerateOrderNumber(ctx context.Context, typePrefix string) (*greennotepb.GenerateOrderNumberResponse, error) {
+	prefix := typePrefix
+	if prefix == "" {
+		prefix = "OP"
+	}
+
+	seq, err := r.q.IncrementOrderSequence(ctx, prefix)
+	if err != nil {
+		return nil, err
+	}
+
+	fy := financialYearString(time.Now())
+	order := fmt.Sprintf("%s/%s/%04d", prefix, fy, seq)
+
+	return &greennotepb.GenerateOrderNumberResponse{
+		OrderNumber:   order,
+		FinancialYear: fy,
+		TypePrefix:    prefix,
+	}, nil
+}
+
+func (r *LegacyRepository) GeneratePaymentNoteOrderNumber(ctx context.Context) (*greennotepb.GenerateOrderNumberResponse, error) {
+	prefix := "PN"
+	seq, err := r.q.IncrementOrderSequence(ctx, prefix)
+	if err != nil {
+		return nil, err
+	}
+	fy := financialYearString(time.Now())
+	order := fmt.Sprintf("%s/%s/%04d", prefix, fy, seq)
+
+	return &greennotepb.GenerateOrderNumberResponse{
+		OrderNumber:   order,
+		FinancialYear: fy,
+		TypePrefix:    prefix,
+	}, nil
+}
+
+func (r *LegacyRepository) GetSupportingDocument(ctx context.Context, req *greennotepb.GetSupportingDocumentRequest) (*greennotepb.SupportingDocumentResponse, error) {
+	row, err := r.q.GetDocumentByID(ctx, req.GetDocumentId())
+	if err == sql.ErrNoRows {
+		return nil, ports.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	doc := &greennotepb.SupportingDocument{
+		Id:        row.ID,
+		Name:      row.Name,
+		FileName:  row.FileName,
+		FileMime:  row.FileMime,
+		FileSize:  row.FileSize,
+		CreatedAt: row.CreatedAt.Format(time.RFC3339),
+	}
+
+	var content []byte
+	if req.GetIncludeBinary() {
+		data, contentType, err := r.docs.Load(ctx, row.ObjectKey)
+		if err != nil {
+			return nil, err
+		}
+		if contentType != "" {
+			doc.FileMime = contentType
+		}
+		content = data
+	}
+
+	return &greennotepb.SupportingDocumentResponse{
+		Document:    doc,
+		FileContent: content,
+	}, nil
+}
+
+// --- helpers ---
+
+func buildCreateParams(p *greennotepb.GreenNotePayload, invBase, invGst, invOther, invTotal float64) sqlcgen.CreateGreenNoteParams {
+	return sqlcgen.CreateGreenNoteParams{
+		OrderNo:                     p.GetOrderNo(),
+		FormattedOrderNo:            sql.NullString{},
+		OrderDate:                   toNullString(p.GetOrderDate()),
+		UserID:                      p.GetUserId(),
+		VendorID:                    p.GetVendorId(),
+		DepartmentID:                p.GetDepartmentId(),
+		BaseValue:                   formatDecimal(p.GetBaseValue()),
+		Gst:                         formatDecimal(p.GetGst()),
+		OtherCharges:                formatDecimal(p.GetOtherCharges()),
+		TotalAmount:                 formatDecimal(p.GetTotalAmount()),
+		SupplierID:                  toNullString(p.GetSupplierId()),
+		MsmeClassification:          toNullString(p.GetMsmeClassification()),
+		ActivityType:                toNullString(p.GetActivityType()),
+		ProtestNoteRaised:           toNullString(p.GetProtestNoteRaised()),
+		BriefOfGoodsServices:        toNullString(p.GetBriefOfGoodsServices()),
+		DelayedDamages:              toNullString(p.GetDelayedDamages()),
+		ContractStartDate:           toNullString(p.GetContractStartDate()),
+		ContractEndDate:             toNullString(p.GetContractEndDate()),
+		AppointedStartDate:          toNullString(p.GetAppointedStartDate()),
+		SupplyPeriodStart:           toNullString(p.GetSupplyPeriodStart()),
+		SupplyPeriodEnd:             toNullString(p.GetSupplyPeriodEnd()),
+		WhetherContract:             toNullString(p.GetWhetherContract()),
+		ExtensionContractPeriod:     toNullString(p.GetExtensionContractPeriod()),
+		ApprovalFor:                 toNullString(p.GetApprovalFor()),
+		BudgetExpenditure:           toNullString(p.GetBudgetExpenditure()),
+		ActualExpenditure:           toNullString(p.GetActualExpenditure()),
+		ExpenditureOverBudget:       toNullString(p.GetExpenditureOverBudget()),
+		NatureOfExpenses:            toNullString(p.GetNatureOfExpenses()),
+		DocumentsWorkdoneSupply:     toNullString(p.GetDocumentsWorkdoneSupply()),
+		DocumentsDiscrepancy:        toNullString(p.GetDocumentsDiscrepancy()),
+		AmountSubmissionNon:         toNullString(p.GetAmountSubmissionNon()),
+		Remarks:                     toNullString(p.GetRemarks()),
+		AuditorRemarks:              toNullString(p.GetAuditorRemarks()),
+		RequiredSubmitted:           toNullString(p.GetRequiredSubmitted()),
+		ExpenseAmountWithinContract: toNullString(p.GetExpenseAmountWithinContract()),
+		MilestoneStatus:             toNullString(p.GetMilestoneStatus()),
+		MilestoneRemarks:            toNullString(p.GetMilestoneRemarks()),
+		SpecifyDeviation:            toNullString(p.GetSpecifyDeviation()),
+		Deviations:                  toNullString(p.GetDeviations()),
+		Status:                      p.GetStatus(),
+		EnableMultipleInvoices:      p.GetEnableMultipleInvoices(),
+		InvoiceBaseTotal:            formatDecimal(invBase),
+		InvoiceGstTotal:             formatDecimal(invGst),
+		InvoiceOtherChargesTotal:    formatDecimal(invOther),
+		InvoiceValueTotal:           formatDecimal(invTotal),
+		IsOnHold:                    false,
+		HoldReason:                  sql.NullString{},
+		HoldAppliedBy:               sql.NullInt64{},
+		HoldAppliedAt:               sql.NullTime{},
+	}
+}
+
+func (r *LegacyRepository) insertDocumentsTx(ctx context.Context, qtx *sqlcgen.Queries, noteID int64, uploads []*greennotepb.SupportingDocumentUpload) ([]sqlcgen.GreenNoteDocument, error) {
+	var dbDocs []sqlcgen.GreenNoteDocument
+	for _, u := range uploads {
+		if u == nil {
+			continue
+		}
+		objectKey := fmt.Sprintf("note-%d/%d-%s", noteID, time.Now().UnixNano(), u.GetOriginalFilename())
+		if err := r.docs.Save(ctx, objectKey, u.GetFileContent(), u.GetMimeType()); err != nil {
+			return nil, err
+		}
+
+		row, err := qtx.InsertDocument(ctx, sqlcgen.InsertDocumentParams{
+			GreenNoteID: noteID,
+			Name:        u.GetName(),
+			FileName:    u.GetOriginalFilename(),
+			FileMime:    u.GetMimeType(),
+			FileSize:    int64(len(u.GetFileContent())),
+			ObjectKey:   objectKey,
+		})
+		if err != nil {
+			return nil, err
+		}
+		dbDocs = append(dbDocs, row)
+	}
+	return dbDocs, nil
+}
+
+func (r *LegacyRepository) listDocumentsByNoteID(ctx context.Context, noteID int64) ([]sqlcgen.GreenNoteDocument, error) {
+	rows, err := r.db.QueryContext(ctx,
+		"SELECT id, green_note_id, name, file_name, file_mime, file_size, object_key, created_at FROM green_note_documents WHERE green_note_id = $1 ORDER BY id ASC",
+		noteID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var docs []sqlcgen.GreenNoteDocument
+	for rows.Next() {
+		var d sqlcgen.GreenNoteDocument
+		if err := rows.Scan(&d.ID, &d.GreenNoteID, &d.Name, &d.FileName, &d.FileMime, &d.FileSize, &d.ObjectKey, &d.CreatedAt); err != nil {
+			return nil, err
+		}
+		docs = append(docs, d)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return docs, nil
+}
+
+func (r *LegacyRepository) listDocumentsByNoteIDTx(ctx context.Context, tx *sql.Tx, noteID int64) ([]sqlcgen.GreenNoteDocument, error) {
+	rows, err := tx.QueryContext(ctx,
+		"SELECT id, green_note_id, name, file_name, file_mime, file_size, object_key, created_at FROM green_note_documents WHERE green_note_id = $1 ORDER BY id ASC",
+		noteID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var docs []sqlcgen.GreenNoteDocument
+	for rows.Next() {
+		var d sqlcgen.GreenNoteDocument
+		if err := rows.Scan(&d.ID, &d.GreenNoteID, &d.Name, &d.FileName, &d.FileMime, &d.FileSize, &d.ObjectKey, &d.CreatedAt); err != nil {
+			return nil, err
+		}
+		docs = append(docs, d)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return docs, nil
+}
+
+func dbNoteToProto(n sqlcgen.GreenNote, invoices []sqlcgen.GreenNoteInvoice, docs []sqlcgen.GreenNoteDocument) *greennotepb.GreenNote {
+	p := &greennotepb.GreenNote{
+		Id:                          n.ID,
+		OrderNo:                     n.OrderNo,
+		FormattedOrderNo:            n.FormattedOrderNo.String,
+		OrderDate:                   n.OrderDate.String,
+		UserId:                      n.UserID,
+		VendorId:                    n.VendorID,
+		DepartmentId:                n.DepartmentID,
+		BaseValue:                   parseDecimal(n.BaseValue),
+		Gst:                         parseDecimal(n.Gst),
+		OtherCharges:                parseDecimal(n.OtherCharges),
+		TotalAmount:                 parseDecimal(n.TotalAmount),
+		SupplierId:                  n.SupplierID.String,
+		MsmeClassification:          n.MsmeClassification.String,
+		ActivityType:                n.ActivityType.String,
+		ProtestNoteRaised:           n.ProtestNoteRaised.String,
+		BriefOfGoodsServices:        n.BriefOfGoodsServices.String,
+		DelayedDamages:              n.DelayedDamages.String,
+		ContractStartDate:           n.ContractStartDate.String,
+		ContractEndDate:             n.ContractEndDate.String,
+		AppointedStartDate:          n.AppointedStartDate.String,
+		SupplyPeriodStart:           n.SupplyPeriodStart.String,
+		SupplyPeriodEnd:             n.SupplyPeriodEnd.String,
+		WhetherContract:             n.WhetherContract.String,
+		ExtensionContractPeriod:     n.ExtensionContractPeriod.String,
+		ApprovalFor:                 n.ApprovalFor.String,
+		BudgetExpenditure:           n.BudgetExpenditure.String,
+		ActualExpenditure:           n.ActualExpenditure.String,
+		ExpenditureOverBudget:       n.ExpenditureOverBudget.String,
+		NatureOfExpenses:            n.NatureOfExpenses.String,
+		DocumentsWorkdoneSupply:     n.DocumentsWorkdoneSupply.String,
+		DocumentsDiscrepancy:        n.DocumentsDiscrepancy.String,
+		AmountSubmissionNon:         n.AmountSubmissionNon.String,
+		Remarks:                     n.Remarks.String,
+		AuditorRemarks:              n.AuditorRemarks.String,
+		RequiredSubmitted:           n.RequiredSubmitted.String,
+		ExpenseAmountWithinContract: n.ExpenseAmountWithinContract.String,
+		MilestoneStatus:             n.MilestoneStatus.String,
+		MilestoneRemarks:            n.MilestoneRemarks.String,
+		SpecifyDeviation:            n.SpecifyDeviation.String,
+		Deviations:                  n.Deviations.String,
+		Status:                      n.Status,
+		EnableMultipleInvoices:      n.EnableMultipleInvoices,
+		InvoiceBaseTotal:            parseDecimal(n.InvoiceBaseTotal),
+		InvoiceGstTotal:             parseDecimal(n.InvoiceGstTotal),
+		InvoiceOtherChargesTotal:    parseDecimal(n.InvoiceOtherChargesTotal),
+		InvoiceValueTotal:           parseDecimal(n.InvoiceValueTotal),
+		IsOnHold:                    n.IsOnHold,
+		CreatedAt:                   n.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:                   n.UpdatedAt.Format(time.RFC3339),
+	}
+
+	if n.IsOnHold {
+		p.HoldInfo = &greennotepb.HoldInfo{
+			Active: true,
+			Reason: n.HoldReason.String,
+			AppliedAt: func() string {
+				if n.HoldAppliedAt.Valid {
+					return n.HoldAppliedAt.Time.Format(time.RFC3339)
+				}
+				return ""
+			}(),
+		}
+	}
+
+	for _, in := range invoices {
+		p.Invoices = append(p.Invoices, &greennotepb.Invoice{
+			Id:                  in.ID,
+			InvoiceNumber:       in.InvoiceNumber,
+			InvoiceDate:         in.InvoiceDate.String,
+			InvoiceBaseValue:    parseDecimal(in.InvoiceBaseValue),
+			InvoiceGst:          parseDecimal(in.InvoiceGst),
+			InvoiceOtherCharges: parseDecimal(in.InvoiceOtherCharges),
+			InvoiceValue:        parseDecimal(in.InvoiceValue),
+			Description:         in.Description.String,
+		})
+	}
+
+	for _, d := range docs {
+		p.Documents = append(p.Documents, &greennotepb.SupportingDocument{
+			Id:        d.ID,
+			Name:      d.Name,
+			FileName:  d.FileName,
+			FileMime:  d.FileMime,
+			FileSize:  d.FileSize,
+			CreatedAt: d.CreatedAt.Format(time.RFC3339),
+		})
+	}
+
+	return p
+}
+
+func sumInvoiceInputs(inputs []*greennotepb.InvoiceInput) (base, gst, other, total float64) {
+	for _, in := range inputs {
+		if in == nil {
+			continue
+		}
+		b := in.GetInvoiceBaseValue()
+		g := in.GetInvoiceGst()
+		o := in.GetInvoiceOtherCharges()
+		v := in.GetInvoiceValue()
+		base += b
+		gst += g
+		other += o
+		total += v
+	}
+	return
+}
+
+func formatDecimal(v float64) string {
+	return fmt.Sprintf("%.2f", v)
+}
+
+func parseDecimal(s string) float64 {
+	if s == "" {
+		return 0
+	}
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0
+	}
+	return f
+}
+
+func toNullString(s string) sql.NullString {
+	if s == "" {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: s, Valid: true}
+}
+
+func financialYearString(t time.Time) string {
+	year := t.Year()
+	month := t.Month()
+	startYear := year
+	endYear := year + 1
+	if month < 4 {
+		startYear = year - 1
+		endYear = year
+	}
+	return fmt.Sprintf("%d-%d", startYear%100, endYear%100)
+}

@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package notification;
+
+option go_package = "github.com/ShristiRnr/NHIT_Backend/api/pb/notificationpb";
+
+import "google/protobuf/struct.proto";
+import "google/api/annotations.proto";
+
+message SendNotificationRequest {
+    string to = 1;
+    string template_name = 2;
+    google.protobuf.Struct data = 3;
+}
+
+message SendNotificationResponse {
+    bool success = 1;
+    string message = 2;
+}
+
+service NotificationService {
+    rpc SendNotification(SendNotificationRequest) returns (SendNotificationResponse) {
+        option (google.api.http) = {
+            post: "/api/v1/notifications"
+            body: "*"
+        };
+    }
+}

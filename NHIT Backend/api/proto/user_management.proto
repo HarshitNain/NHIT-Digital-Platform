@@ -1,0 +1,685 @@
+syntax = "proto3";
+
+
+option go_package = "github.com/ShristiRnr/NHIT_Backend/api/pb/userpb";
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+import "google/api/annotations.proto";
+
+// ====================
+// User Management Service with RBAC
+// ====================
+service UserManagement {
+  // Tenant / Super Admin
+  rpc CreateTenant(CreateTenantRequest) returns (TenantResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/tenants"
+      body: "*"
+    };
+  }
+  rpc GetTenant(GetTenantRequest) returns (TenantResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/tenants/{tenant_id}"
+    };
+  }
+
+  // Role Management (Dynamic)
+  rpc CreateRole(CreateRoleRequest) returns (RoleResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/roles"
+      body: "*"
+    };
+  }
+  rpc ListRoles(ListRolesRequest) returns (ListRolesResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/roles"
+    };
+  }
+  rpc ListRolesByOrganization(ListRolesByOrganizationRequest) returns (ListRolesResponse);
+  rpc GetRole(GetRoleRequest) returns (RoleResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/roles/{role_id}"
+    };
+  }
+  rpc UpdateRole(UpdateRoleRequest) returns (RoleResponse) {
+    option (google.api.http) = {
+      put: "/api/v1/roles/{role_id}"
+      body: "*"
+    };
+  }
+  rpc DeleteRole(DeleteRoleRequest) returns (google.protobuf.Empty) {
+    option (google.api.http) = {
+      delete: "/api/v1/roles/{role_id}"
+    };
+  }
+  rpc CloneRole(CloneRoleRequest) returns (RoleResponse);
+
+  // Permission Management
+  rpc ListPermissions(ListPermissionsRequest) returns (ListPermissionsResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/permissions"
+    };
+  }
+  rpc GetPermissionsByModule(GetPermissionsByModuleRequest) returns (ListPermissionsResponse);
+  rpc CreateCustomPermission(CreateCustomPermissionRequest) returns (PermissionResponse);
+
+  // --------------------
+  // User Management (CRUD + Roles)
+  // --------------------
+  rpc CreateUser(CreateUserRequest) returns (UserResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/users"
+      body: "*"
+    };
+  }
+  rpc GetUser(GetUserRequest) returns (UserResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/users/{user_id}"
+    };
+  }
+  rpc ListUsers(ListUsersRequest) returns (ListUsersResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/users"
+    };
+  }
+  rpc UpdateUser(UpdateUserRequest) returns (UserResponse) {
+    option (google.api.http) = {
+      put: "/api/v1/users/{user_id}"
+      body: "*"
+    };
+  }
+  rpc DeleteUser(DeleteUserRequest) returns (google.protobuf.Empty) {
+    option (google.api.http) = {
+      delete: "/api/v1/users/{user_id}"
+    };
+  }
+
+  // Assign or Update Roles
+  rpc AssignRolesToUser(AssignRolesRequest) returns (UserResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/users/{user_id}/roles"
+      body: "*"
+    };
+  }
+  rpc ListRolesOfUser(GetUserRequest) returns (ListRolesResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/users/{user_id}/roles"
+    };
+  }
+
+  // User Login History
+  rpc CreateUserLoginHistory(CreateUserLoginHistoryRequest) returns (UserLoginHistoryResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/users/me/login-history"
+      body: "*"
+    };
+  }
+  rpc ListUserLoginHistories(ListUserLoginHistoriesRequest) returns (ListUserLoginHistoriesResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/users/me/login-history"
+    };
+  }
+
+  // User Deactivation/Reactivation
+  rpc DeactivateUser(DeactivateUserRequest) returns (UserResponse) {
+    option (google.api.http) = {
+      patch: "/api/v1/users/{user_id}/deactivate"
+      body: "*"
+    };
+  }
+  rpc ReactivateUser(ReactivateUserRequest) returns (UserResponse) {
+    option (google.api.http) = {
+      patch: "/api/v1/users/{user_id}/reactivate"
+      body: "*"
+    };
+  }
+
+  // Activity Logs
+  rpc CreateActivityLog(CreateActivityLogRequest) returns (ActivityLogResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/activity-logs"
+      body: "*"
+    };
+  }
+  rpc ListActivityLogs(ListActivityLogsRequest) returns (ListActivityLogsResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/activity-logs"
+    };
+  }
+
+  // Notifications
+  rpc CreateNotification(CreateNotificationRequest) returns (NotificationResponse);
+  rpc ListNotifications(ListNotificationsRequest) returns (ListNotificationsResponse);
+  rpc MarkNotificationAsRead(MarkNotificationAsReadRequest) returns (NotificationResponse);
+
+  // User-Organization Management
+  rpc AddUserToOrganization(AddUserToOrganizationRequest) returns (UserResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/users/{user_id}/organizations"
+      body: "*"
+    };
+  }
+  rpc RemoveUserFromOrganization(RemoveUserFromOrganizationRequest) returns (google.protobuf.Empty) {
+    option (google.api.http) = {
+      delete: "/api/v1/users/{user_id}/organizations/{org_id}"
+    };
+  }
+  rpc ListUserOrganizations(ListUserOrganizationsRequest) returns (ListUserOrganizationsResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/users/{user_id}/organizations"
+    };
+  }
+
+  // Dropdown endpoints for Create User form
+  rpc GetDepartmentsDropdown(GetDropdownRequest) returns (DepartmentsDropdownResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/users/dropdowns/departments"
+    };
+  }
+  rpc GetDesignationsDropdown(GetDropdownRequest) returns (DesignationsDropdownResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/users/dropdowns/designations"
+    };
+  }
+  rpc GetRolesDropdown(GetDropdownRequest) returns (RolesDropdownResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/users/dropdowns/roles"
+    };
+  }
+
+  // Signature Upload
+  rpc UploadUserSignature(UploadSignatureRequest) returns (UploadSignatureResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/users/{user_id}/signature"
+      body: "*"
+    };
+  }
+
+  // Pagination & Count
+  rpc ListUsersPaginated(ListUsersPaginatedRequest) returns (ListUsersPaginatedResponse);
+  rpc CountUsersByTenant(CountUsersByTenantRequest) returns (CountUsersByTenantResponse);
+}
+
+// ====================
+// RBAC: Roles & Permissions (Dynamic)
+// ====================
+message Role {
+  string role_id = 1;
+  string tenant_id = 2;
+  string org_id = 3;                    // Organization specific roles
+  string name = 4;
+  string description = 5;               // Role description
+  repeated string permissions = 6;
+  bool is_system_role = 7;              // System vs custom role
+  string created_by = 8;                // Super admin who created role
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp updated_at = 10;
+}
+
+message Permission {
+  string permission_id = 1;
+  string name = 2;                      // e.g., "users.create", "projects.view"
+  string description = 3;               // Human readable description
+  string module = 4;                    // e.g., "users", "projects", "reports"
+  string action = 5;                    // e.g., "create", "read", "update", "delete"
+  bool is_system_permission = 6;        // System vs custom permission
+}
+
+message CreateRoleRequest {
+  string tenant_id = 1;
+  string org_id = 2;                    // Organization where role is created
+  string name = 3;
+  string description = 4;               // Optional: backend derives from permissions if empty
+  repeated string permissions = 5;      // Permission keys; REQUIRED
+  string created_by = 6;                // Optional: backend uses JWT name; clients can omit
+}
+
+message UpdateRoleRequest {
+  string role_id = 1;
+  string name = 2;
+  string description = 3;
+  repeated string permissions = 4;
+  string updated_by = 5;                // Who is updating the role
+}
+
+message GetRoleRequest {
+  string role_id = 1;
+}
+
+message DeleteRoleRequest {
+  string role_id = 1;
+}
+
+message RoleResponse {
+  string role_id = 1;
+  string tenant_id = 2;
+  string name = 3;
+  repeated string permissions = 4;
+  string org_id = 5;                    // Organization where role is defined (optional)
+  string description = 6;               // Role description (derived from permissions)
+  string created_by = 7;                // Super admin name who created role
+}
+
+message ListRolesRequest {
+  string tenant_id = 1;
+  int32 page = 2;
+  int32 page_size = 3;
+  optional string org_id = 4; // Filter by organization
+}
+
+message ListRolesResponse {
+  repeated RoleResponse roles = 1;
+  PaginationMetadata pagination = 2;
+}
+
+// ====================
+// Users
+// ====================
+message User {
+  string user_id = 1;
+  string name = 2;
+  string email = 3;
+  string department_name = 16;
+  string designation_name = 17;
+  google.protobuf.Timestamp email_verified_at = 4;
+  google.protobuf.Timestamp last_login_at = 5;
+  google.protobuf.Timestamp last_logout_at = 6;
+  string last_login_ip = 7;
+  string user_agent = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp updated_at = 10;
+  repeated string roles = 11;       // Role names
+  repeated string permissions = 12; // Derived from roles
+  bool is_active = 13;             // User active status (for soft delete)
+  google.protobuf.Timestamp deactivated_at = 14; // When user was deactivated
+  string deactivated_by = 15;      // Who deactivated the user
+  string deactivated_by_name = 18; // Name of the user who deactivated
+  string signature_url = 19;
+  string contact_number = 20;      // User contact/phone number
+}
+
+message CreateUserRequest {
+  string tenant_id = 1;
+  string org_id = 2;                    // Organization where user is created
+  string email = 3;
+  string name = 4;
+  string password = 5;
+  string role_id = 6;                   // Single role per organization
+  string department_id = 7;             // Department assignment
+  string designation_id = 8;            // Designation assignment
+  repeated string project_ids = 9;      // Projects assigned to user
+  string created_by = 10;               // Super admin creating the user
+  
+  // Banking Information
+  string account_holder_name = 11;      // Bank account holder name
+  string bank_name = 12;                // Name of the bank
+  string bank_account_number = 13;      // Bank account number
+  string ifsc_code = 14;                // IFSC code (11 characters)
+  
+  // Signature
+  bytes signature_file = 15;            // Signature image file (for gRPC)
+  string signature_filename = 16;       // Original filename
+  string contact_number = 17;           // User contact/phone number
+}
+
+message UpdateUserRequest {
+  string user_id = 1;
+  string name = 2;
+  string email = 3;
+  string password = 4;
+  repeated string roles = 5;
+  string department_id = 6;
+  string designation_id = 7;
+  bool is_active = 8;
+  string contact_number = 9;            // User contact/phone number
+}
+
+message DeleteUserRequest {
+  string user_id = 1;
+}
+
+message GetUserRequest {
+  string user_id = 1;
+}
+
+message ListUsersRequest {
+  string tenant_id = 1;
+  int32 page = 2;
+  int32 page_size = 3;
+}
+
+message ListUsersResponse {
+  repeated User users = 1;
+  PaginationMetadata pagination = 2;
+}
+
+message AssignRolesRequest {
+  string user_id = 1;
+  repeated string roles = 2;
+}
+
+message UserResponse {
+  string user_id = 1;
+  string name = 2;
+  string email = 3;
+  repeated string roles = 4;
+  repeated string permissions = 5;
+  string department_id = 6;
+  string designation_id = 7;
+  string department_name = 8;
+  string designation_name = 9;
+  bool is_active = 10;
+  string signature_url = 11;
+  string contact_number = 12;           // User contact/phone number
+}
+
+// ====================
+// Tenant
+// ====================
+message CreateTenantRequest {
+  string name = 1;
+  string email = 2;     // Super Admin email
+  string password = 3;  // Super Admin password
+}
+
+message GetTenantRequest {
+  string tenant_id = 1;
+}
+
+message TenantResponse {
+  string tenant_id = 1;
+  string name = 2;
+  string email = 3;
+  string password = 4;
+}
+
+// ====================
+// User Login History
+// ====================
+message CreateUserLoginHistoryRequest {
+  string user_id = 1;
+  string ip_address = 2;
+  string user_agent = 3;
+}
+
+message UserLoginHistoryResponse {
+  string history_id = 1;
+  string user_id = 2;
+  string ip_address = 3;
+  string user_agent = 4;
+  google.protobuf.Timestamp login_time = 5;
+}
+
+message ListUserLoginHistoriesRequest {
+  string user_id = 1;
+  PageRequest page = 2;
+}
+
+message ListUserLoginHistoriesResponse {
+  repeated UserLoginHistoryResponse histories = 1;
+  PaginationMetadata pagination = 2;
+}
+
+// ====================
+// Pagination
+// ====================
+message PageRequest {
+  int32 page = 1;
+  int32 page_size = 2;
+}
+
+message PaginationMetadata {
+  int32 page = 1;
+  int32 page_size = 2;
+  int32 total_pages = 3;
+  int32 total_items = 4;
+}
+
+// ====================
+// Users Paginated & Count
+// ====================
+message ListUsersPaginatedRequest {
+  string tenant_id = 1;
+  int32 page = 2;
+  int32 page_size = 3;
+}
+
+message ListUsersPaginatedResponse {
+  repeated User users = 1;
+  int32 total = 2;
+  int32 page = 3;
+  int32 page_size = 4;
+}
+
+message CountUsersByTenantRequest {
+  string tenant_id = 1;
+}
+
+message CountUsersByTenantResponse {
+  int64 count = 1;
+}
+
+// ====================
+// User Deactivation/Reactivation
+// ====================
+message DeactivateUserRequest {
+  string user_id = 1;
+  string deactivated_by = 2;  // Super admin ID
+  string reason = 3;          // Reason for deactivation
+}
+
+message ReactivateUserRequest {
+  string user_id = 1;
+  string reactivated_by = 2;  // Super admin ID
+}
+
+// ====================
+// Activity Logs
+// ====================
+message ActivityLog {
+  int32 id = 1;
+  string name = 2;            // e.g., "User Logged in with email-ID [user@example.com]"
+  string description = 3;     // e.g., "User successfully logged in"
+  google.protobuf.Timestamp created_at = 4;
+}
+
+message CreateActivityLogRequest {
+  string name = 1;
+  string description = 2;
+}
+
+message ActivityLogResponse {
+  int32 id = 1;
+  string name = 2;
+  string description = 3;
+  google.protobuf.Timestamp created_at = 4;
+}
+
+message ListActivityLogsRequest {
+  PageRequest page = 1;
+}
+
+message ListActivityLogsResponse {
+  repeated ActivityLog logs = 1;
+  PaginationMetadata pagination = 2;
+}
+
+// ====================
+// Notifications
+// ====================
+message Notification {
+  string notification_id = 1;
+  string recipient_id = 2;    // User ID who receives the notification
+  string title = 3;
+  string message = 4;
+  string type = 5;            // e.g., "USER_DEACTIVATED", "ROLE_CHANGED"
+  bool is_read = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp read_at = 8;
+}
+
+message CreateNotificationRequest {
+  string recipient_id = 1;
+  string title = 2;
+  string message = 3;
+  string type = 4;
+}
+
+message NotificationResponse {
+  string notification_id = 1;
+  string recipient_id = 2;
+  string title = 3;
+  string message = 4;
+  string type = 5;
+  bool is_read = 6;
+  google.protobuf.Timestamp created_at = 7;
+}
+
+message ListNotificationsRequest {
+  string user_id = 1;
+  bool unread_only = 2;       // Filter only unread notifications
+  PageRequest page = 3;
+}
+
+message ListNotificationsResponse {
+  repeated Notification notifications = 1;
+  PaginationMetadata pagination = 2;
+}
+
+message MarkNotificationAsReadRequest {
+  string notification_id = 1;
+}
+
+// ====================
+// Dynamic Role & Permission Messages
+// ====================
+message ListRolesByOrganizationRequest {
+  string org_id = 1;
+  string tenant_id = 2;
+  bool include_system_roles = 3;        // Include system roles or only custom
+  int32 page = 4;
+  int32 page_size = 5;
+}
+
+message CloneRoleRequest {
+  string source_role_id = 1;
+  string target_org_id = 2;             // Clone to different organization
+  string new_name = 3;
+  string cloned_by = 4;                 // Super admin cloning the role
+}
+
+message ListPermissionsRequest {
+  string module = 1;                    // Optional: filter by module
+  bool system_only = 2;                 // Show only system permissions
+}
+
+message ListPermissionsResponse {
+  repeated PermissionResponse permissions = 1;
+}
+
+message GetPermissionsByModuleRequest {
+  string module = 1;                    // e.g., "users", "projects", "reports"
+}
+
+message CreateCustomPermissionRequest {
+  string name = 1;                      // e.g., "custom.special_access"
+  string description = 2;
+  string module = 3;
+  string action = 4;
+  string created_by = 5;                // Super admin creating permission
+}
+
+message PermissionResponse {
+  string permission_id = 1;
+  string name = 2;
+  string description = 3;
+  string module = 4;
+  string action = 5;
+  bool is_system_permission = 6;
+}
+
+// ====================
+// User-Organization Management
+// ====================
+message AddUserToOrganizationRequest {
+  string user_id = 1;
+  string org_id = 2;                    // Organization to join
+  string role_id = 3;                   // Role in this organization
+  string department_id = 4;             // Department in this organization
+  string designation_id = 5;            // Designation in this organization
+  repeated string project_ids = 6;      // Projects in this organization
+  string added_by = 7;                  // Super admin adding the user
+}
+
+message RemoveUserFromOrganizationRequest {
+  string user_id = 1;
+  string org_id = 2;
+  string removed_by = 3;                // Super admin removing the user
+  string reason = 4;                    // Reason for removal
+}
+
+message ListUserOrganizationsRequest {
+  string user_id = 1;
+}
+
+message ListUserOrganizationsResponse {
+  repeated UserOrganizationInfo organizations = 1;
+}
+
+message UserOrganizationInfo {
+  string org_id = 1;
+  string org_name = 2;
+  string role_name = 3;
+  string department_name = 4;
+  string designation_name = 5;
+  repeated string project_names = 6;
+  bool is_current_context = 7;          // Currently active organization
+  google.protobuf.Timestamp joined_at = 8;
+}
+
+// ====================
+// Dropdown Messages for Create User Form
+// ====================
+message GetDropdownRequest {
+  string org_id = 1;  // Organization ID to filter by (from JWT context)
+}
+
+message DropdownItem {
+  string id = 1;
+  string name = 2;
+}
+
+message DepartmentsDropdownResponse {
+  repeated DropdownItem departments = 1;
+}
+
+message DesignationsDropdownResponse {
+  repeated DropdownItem designations = 1;
+}
+
+message RolesDropdownResponse {
+  repeated DropdownItem roles = 1;
+}
+
+// ====================
+// Signature Upload Messages
+// ====================
+message UploadSignatureRequest {
+  string user_id = 1;
+  bytes file_content = 2;
+  bytes signature_file = 3;
+  string filename = 4;
+  string signature_url = 5;
+}
+
+message UploadSignatureResponse {
+  bool success = 1;
+  string message = 2;
+  string user_id = 3;
+  string signature_url = 4;
+  string file_name = 5;
+  string mime_type = 6;
+  int64 file_size = 7;
+  google.protobuf.Timestamp uploaded_at = 8;
+}

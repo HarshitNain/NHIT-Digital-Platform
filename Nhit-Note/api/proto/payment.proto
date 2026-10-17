@@ -1,0 +1,454 @@
+syntax = "proto3";
+
+package payment;
+
+option go_package = "github.com/ShristiRnr/Nhit-Note/api/pb/paymentpb;paymentpb";
+
+import "google/protobuf/empty.proto";
+import "google/api/annotations.proto";
+import "common.proto";
+
+// ---------- PAYMENT SERVICE ----------
+service PaymentService {
+  // Mirrors OptimizedPaymentController@index / PaymentController@index
+  rpc ListPayments (ListPaymentsRequest) returns (ListPaymentsResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/payments"
+    };
+  }
+
+  // DataTables-friendly listing (PaymentController@getPayments)
+  rpc ListPaymentsDataTable (ListPaymentsDataTableRequest) returns (ListPaymentsDataTableResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/payments/datatable"
+    };
+  }
+
+  // Fetch grouped payment request by SL number (PaymentController@editPaymentRequest)
+  rpc GetPaymentGroup (GetPaymentGroupRequest) returns (PaymentGroupResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/payments/{sl_no}"
+    };
+  }
+
+  // Create payment requests in bulk (OptimizedPaymentController@store, PaymentController@store)
+  rpc CreatePaymentRequests (CreatePaymentRequestsRequest) returns (PaymentGroupResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/payments"
+      body: "*"
+    };
+  }
+
+  // Update payment request group (PaymentController@updatePaymentRequest)
+  rpc UpdatePaymentGroup (UpdatePaymentGroupRequest) returns (PaymentGroupResponse) {
+    option (google.api.http) = {
+      patch: "/api/v1/payments/{sl_no}"
+      body: "*"
+    };
+  }
+
+  // Delete payments under SL number (OptimizedPaymentController@destroy, PaymentController@destroy)
+  rpc DeletePayment (DeletePaymentRequest) returns (google.protobuf.Empty) {
+    option (google.api.http) = {
+      delete: "/api/v1/payments/{id}"
+    };
+  }
+
+  // Remove individual payment line item (PaymentController@deleteRequestItem)
+  rpc DeletePaymentItem (DeletePaymentItemRequest) returns (google.protobuf.Empty) {
+    option (google.api.http) = {
+      delete: "/api/v1/payments/{sl_no}/items/{id}"
+    };
+  }
+
+  // Search vendors based on account/type filters (OptimizedPaymentController@searchVendor)
+  rpc SearchVendors (SearchVendorsRequest) returns (SearchVendorsResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/payments/search-vendors"
+      body: "*"
+    };
+  }
+
+  // Search internal vendors (PaymentController@searchFromVendor)
+  rpc SearchInternalVendors (SearchInternalVendorsRequest) returns (SearchVendorsResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/payments/vendors/internal"
+    };
+  }
+
+  // Search projects (PaymentController@searchProject)
+  rpc SearchProjects (SearchProjectsRequest) returns (SearchProjectsResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/payments/projects"
+    };
+  }
+
+  // Fetch "from account" options for template (PaymentController@getFromAccount)
+  rpc GetFromAccountOptions (GetFromAccountOptionsRequest) returns (GetFromAccountOptionsResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/payments/from-accounts/{template_type}"
+    };
+  }
+
+  // Fetch all vendors (PaymentController@getAllVendors)
+  rpc GetAllVendors (google.protobuf.Empty) returns (SearchVendorsResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/payments/vendors"
+    };
+  }
+
+  // Queue request builder helpers (PaymentController@addRequestInQueue)
+  rpc AddRequestToQueue (AddRequestToQueueRequest) returns (CartSnapshotResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/payments/cart"
+      body: "*"
+    };
+  }
+
+  // Remove/clear queue items (PaymentController@deleteRequestInQueue)
+  rpc RemoveRequestFromQueue (RemoveRequestFromQueueRequest) returns (CartSnapshotResponse) {
+    option (google.api.http) = {
+      delete: "/api/v1/payments/cart"
+    };
+  }
+
+  // Ratio helper endpoint (PaymentController@ratio)
+  rpc GetQueueSnapshot (QueueSnapshotRequest) returns (CartSnapshotResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/payments/cart"
+    };
+  }
+
+  // Create shortcut (PaymentController@store shortcut portion, OptimizedPaymentController@createPaymentShortcut)
+  rpc CreatePaymentShortcut (CreatePaymentShortcutRequest) returns (PaymentShortcutResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/payments/shortcuts"
+      body: "*"
+    };
+  }
+
+  // Execute shortcut (PaymentController@shortcut, OptimizedPaymentController@shortcut)
+  rpc ExecutePaymentShortcut (ExecutePaymentShortcutRequest) returns (PaymentGroupResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/payments/shortcuts/{shortcut_id}/execute"
+      body: "*"
+    };
+  }
+
+  // Generate RTGS/NEFT bank letter (OptimizedPaymentController@bankLetter)
+  rpc CreateBankLetterFromNotes (CreateBankLetterFromNotesRequest) returns (CreateBankLetterFromNotesResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/payments/bank-letters"
+      body: "*"
+    };
+  }
+
+  // Update bank letter approval logs (OptimizedPaymentController@logUpdate)
+  rpc ProcessBankLetterLog (ProcessBankLetterLogRequest) returns (ProcessBankLetterLogResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/payments/bank-letters/{sl_no}/log"
+      body: "*"
+    };
+  }
+
+  // Generate payment serial/order number (generateSerialNumber helper)
+  rpc GeneratePaymentSerialNumber (google.protobuf.Empty) returns (GeneratePaymentSerialNumberResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/payments/order-number"
+    };
+  }
+
+  // Simple gRPC health/test endpoint for automated tests
+  rpc TestPaymentAPI (google.protobuf.Empty) returns (TestPaymentAPIResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/payments/test"
+    };
+  }
+}
+
+// ---------- REQUEST MESSAGES ----------
+message ListPaymentsRequest {
+  string status = 1;                    // Filter by status (default "S")
+  bool include_all = 2;                 // When true, ignore status filter
+  int64 auth_user_id = 3;               // Requesting user id
+  repeated string user_roles = 4;       // Role names for access checks
+  bool only_assigned = 5;               // Restrict to reviewer assignments
+  bool drafts_only = 6;                 // List drafts only
+  bool admin_view = 7;                  // Force admin listing logic
+  string search = 8;                    // Free-text search
+  string sort_by = 9;                   // Column for sorting
+  string sort_direction = 10;           // asc/desc
+  int32 page = 11;                      // Pagination page number
+  int32 per_page = 12;                  // Pagination size
+}
+
+message ListPaymentsDataTableRequest {
+  int32 draw = 1;
+  int32 start = 2;
+  int32 length = 3;
+  string order_column = 4;
+  string order_direction = 5;
+  string search_value = 6;
+  string status = 7;
+  int64 auth_user_id = 8;
+  repeated string user_roles = 9;
+}
+
+message GetPaymentGroupRequest {
+  string sl_no = 1;
+}
+
+message CreatePaymentRequestsRequest {
+  repeated PaymentRequestItem vendors = 1; // Mirrors request->vendor chunk structure
+  bool create_shortcut = 2;
+  string shortcut_name = 3;
+  repeated int64 payment_note_ids = 4;
+  int64 created_by = 5;
+}
+
+message UpdatePaymentGroupRequest {
+  string sl_no = 1;
+  string status = 2;                    // D, S, etc.
+  string type = 3;                      // I or E per controller logic
+  repeated PaymentUpdateItem vendors = 4; // Updated payment rows
+  bool status_only = 5;                 // Only status change when true
+  int64 auth_user_id = 6;
+}
+
+message DeletePaymentRequest {
+  int64 id = 1;
+  string sl_no = 2;
+}
+
+message DeletePaymentItemRequest {
+  string sl_no = 1;
+  int64 id = 2;
+}
+
+message SearchVendorsRequest {
+  int32 s_no = 1;                       // from_account indicator
+  string project = 2;
+  string template_type = 3;
+  string search = 4;
+}
+
+message SearchInternalVendorsRequest {
+  string search = 1;
+}
+
+message SearchProjectsRequest {
+  string search = 1;
+}
+
+message GetFromAccountOptionsRequest {
+  string template_type = 1;
+}
+
+message AddRequestToQueueRequest {
+  PaymentRequestItem item = 1;
+  bool clear_existing = 2;              // When true, resets cart before add
+  int64 user_id = 3;
+}
+
+message RemoveRequestFromQueueRequest {
+  string index = 1;                     // Base64 encoded index as per controller
+  bool clear_cart = 2;
+  int64 user_id = 3;
+}
+
+message QueueSnapshotRequest {
+  int64 user_id = 1;
+}
+
+message CreatePaymentShortcutRequest {
+  string sl_no = 1;                     // Source SL number for shortcut (optional)
+  string shortcut_name = 2;
+  repeated PaymentRequestItem request_items = 3; // Raw payload for new shortcut
+}
+
+message ExecutePaymentShortcutRequest {
+  int64 shortcut_id = 1;
+  int64 actor_id = 2;
+}
+
+message CreateBankLetterFromNotesRequest {
+  repeated int64 payment_note_ids = 1;
+  int64 actor_id = 2;
+}
+
+message CreateBankLetterFromNotesResponse {
+  string sl_no = 1;
+  int32 payments_count = 2;
+  double total_amount = 3;
+}
+
+message ProcessBankLetterLogRequest {
+  string sl_no = 1;
+  string status = 2;                    // A or R
+  string remarks = 3;
+  int64 reviewer_id = 4;
+}
+
+message ProcessBankLetterLogResponse {
+  string message = 1;
+  BankLetterApprovalLog log = 2;
+}
+
+message GeneratePaymentSerialNumberResponse {
+  string sl_no = 1;
+}
+
+// ---------- SHARED STRUCTURES ----------
+message PaymentRequestItem {
+  string template_type = 1;
+  string project = 2;
+  string account_full_name = 3;
+  string from_account_type = 4;
+  string from_account_number = 5;
+  string to_account_type = 6;
+  string beneficiary_name = 7;
+  string beneficiary_account_number = 8;
+  string beneficiary_bank_name = 9;
+  string ifsc_code = 10;
+  double amount = 11;
+  string purpose = 12;
+  int64 payment_note_id = 13;
+}
+
+message PaymentUpdateItem {
+  int64 id = 1;
+  string template_type = 2;
+  string project = 3;
+  string account_full_name = 4;
+  string from_account_type = 5;
+  string from_account_number = 6;
+  string to_account_type = 7;
+  string beneficiary_name = 8;
+  string beneficiary_account_number = 9;
+  string beneficiary_bank_name = 10;
+  string ifsc_code = 11;
+  double amount = 12;
+  string purpose = 13;
+  string status = 14;
+}
+
+message PaymentShortcut {
+  int64 id = 1;
+  string sl_no = 2;
+  string shortcut_name = 3;
+  string request_data_json = 4;
+  string created_at = 5;
+  string updated_at = 6;
+}
+
+message PaymentShortcutResponse {
+  PaymentShortcut shortcut = 1;
+}
+
+message PaymentGroup {
+  string sl_no = 1;
+  string status = 2;
+  string template_type = 3;
+  double net_payable_round_off = 4;
+  string created_at = 5;
+  string updated_at = 6;
+  common.RelatedUser owner = 7;
+  common.PaymentNoteReference payment_note = 8;
+  repeated Payment payments = 9;
+  PaymentShortcut shortcut = 10;
+}
+
+message Payment {
+  int64 id = 1;
+  string sl_no = 2;
+  string template_type = 3;
+  string project = 4;
+  string account_full_name = 5;
+  string from_account_type = 6;
+  string full_account_number = 7;
+  string to = 8;
+  string to_account_type = 9;
+  string name_of_beneficiary = 10;
+  string account_number = 11;
+  string name_of_bank = 12;
+  string ifsc_code = 13;
+  double amount = 14;
+  string purpose = 15;
+  string status = 16;
+  int64 user_id = 17;
+  int64 payment_note_id = 18;
+  string created_at = 19;
+  string updated_at = 20;
+  common.PaymentNoteReference payment_note = 21;
+}
+
+message BankLetterApprovalLog {
+  int64 id = 1;
+  string sl_no = 2;
+  string status = 3;
+  string comments = 4;
+  common.RelatedUser reviewer = 5;
+  string created_at = 6;
+  repeated common.PaymentApprovalPriority priorities = 7;
+}
+
+message VendorInfo {
+  int64 id = 1;
+  string project = 2;
+  int32 s_no = 3;
+  string short_name = 4;
+  string account_name = 5;
+  string vendor_code = 6;
+  string vendor_name = 7;
+  string vendor_type = 8;
+  string account_number = 9;
+  string vendor_nick_name = 10;
+  string beneficiary_name = 11;
+  string from_account_type = 12;
+  string name_of_bank = 13;
+  string ifsc_code = 14;
+}
+
+message AccountOption {
+  string name = 1;
+  string account_number = 2;
+}
+
+message CartSnapshotResponse {
+  repeated PaymentRequestItem items = 1;
+}
+
+// ---------- RESPONSE MESSAGES ----------
+message ListPaymentsResponse {
+  repeated PaymentGroup groups = 1;
+  common.Pagination pagination = 2;
+}
+
+message ListPaymentsDataTableResponse {
+  int32 draw = 1;
+  int64 total_records = 2;
+  int64 total_display_records = 3;
+  repeated Payment payments = 4;
+}
+
+message PaymentGroupResponse {
+  PaymentGroup group = 1;
+}
+
+message SearchVendorsResponse {
+  repeated VendorInfo vendors = 1;
+}
+
+message SearchProjectsResponse {
+  repeated string projects = 1;
+}
+
+message GetFromAccountOptionsResponse {
+  repeated AccountOption accounts = 1;
+}
+
+message TestPaymentAPIResponse {
+  string status = 1;    // e.g. "ok"
+  string message = 2;   // Diagnostic string
+  int64 timestamp = 3;  // Unix epoch seconds
+}

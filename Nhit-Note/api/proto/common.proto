@@ -1,0 +1,80 @@
+syntax = "proto3";
+
+package common;
+
+option go_package = "github.com/ShristiRnr/Nhit-Note/api/pb/commonpb;commonpb";
+
+// ---------- SHARED COMMON TYPES ----------
+// These types are shared across multiple services to avoid conflicts
+
+message RelatedUser {
+  int64 id = 1;
+  string name = 2;
+  string email = 3;
+  string role = 4;
+  string designation = 5;
+  string signature_url = 6;
+}
+
+message Pagination {
+  int32 page = 1;
+  int32 per_page = 2;
+  int64 total_items = 3;
+  int32 total_pages = 4;
+}
+
+message RelatedVendor {
+  int64 id = 1;
+  string project = 2;
+  string vendor_name = 3;
+}
+
+message RelatedSupplier {
+  int64 id = 1;
+  string vendor_name = 2;
+  string vendor_email = 3;
+}
+
+// ---------- PAYMENT-SPECIFIC REFERENCES ----------
+// These are specific to payment domain but shared between payment services
+
+message PaymentGreenNoteReference {
+  string id = 1;
+  string order_no = 2;
+  string formatted_order_no = 3;
+  double invoice_value = 4;
+  RelatedVendor vendor = 5;
+  RelatedSupplier supplier = 6;
+}
+
+message PaymentReimbursementNoteReference {
+  int64 id = 1;
+  string note_no = 2;
+  string project_name = 3;
+  RelatedUser select_user = 4;
+  RelatedUser owner = 5;
+  double total_payable = 6;
+  double advance_adjusted = 7;
+}
+
+message PaymentApprovalPriority {
+  int64 id = 1;
+  int32 approver_level = 2;
+  RelatedUser reviewer = 3;
+}
+
+message PaymentNoteReference {
+  int64 id = 1;
+  string note_no = 2;
+  double net_payable_round_off = 3;
+  string status = 4;
+  PaymentGreenNoteReference green_note = 5;
+  PaymentReimbursementNoteReference reimbursement_note = 6;
+}
+
+message HoldDetails {
+  bool active = 1;
+  string reason = 2;
+  RelatedUser applied_by = 3;
+  string applied_at = 4;
+}

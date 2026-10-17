@@ -1,0 +1,448 @@
+syntax = "proto3";
+
+package reimbursement;
+
+option go_package = "github.com/ShristiRnr/Nhit-Note/api/pb/reimbursementpb;reimbursementpb";
+
+import "google/protobuf/empty.proto";
+import "google/api/annotations.proto";
+
+// ---------- REIMBURSEMENT NOTE SERVICE ----------
+service ReimbursementNoteService {
+  // Mirrors ReimbursementNoteController@index
+  rpc ListReimbursementNotes (ListReimbursementNotesRequest) returns (ListReimbursementNotesResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/reimbursement-notes"
+    };
+  }
+
+  // DataTables listing support for AJAX requests
+  rpc ListReimbursementNotesDataTable (ListReimbursementNotesDataTableRequest) returns (ListReimbursementNotesDataTableResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/reimbursement-notes/datatable"
+    };
+  }
+
+  // Mirrors ReimbursementNoteController@show
+  rpc GetReimbursementNote (GetReimbursementNoteRequest) returns (ReimbursementNoteResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/reimbursement-notes/{id}"
+    };
+  }
+
+  // Mirrors ReimbursementNoteController@create
+  rpc GetReimbursementCreateData (GetReimbursementCreateDataRequest) returns (ReimbursementCreateDataResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/reimbursement-notes/create"
+    };
+  }
+
+  // Mirrors ReimbursementNoteController@store
+  rpc CreateReimbursementNote (CreateReimbursementNoteRequest) returns (ReimbursementNoteResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/reimbursement-notes"
+      body: "*"
+    };
+  }
+
+  // Mirrors ReimbursementNoteController@edit
+  rpc GetReimbursementEditData (GetReimbursementEditDataRequest) returns (ReimbursementEditDataResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/reimbursement-notes/{id}/edit"
+    };
+  }
+
+  // Mirrors ReimbursementNoteController@update
+  rpc UpdateReimbursementNote (UpdateReimbursementNoteRequest) returns (ReimbursementNoteResponse) {
+    option (google.api.http) = {
+      patch: "/api/v1/reimbursement-notes/{id}"
+      body: "*"
+    };
+  }
+
+  // Mirrors ReimbursementNoteController@destroy
+  rpc DeleteReimbursementNote (DeleteReimbursementNoteRequest) returns (google.protobuf.Empty) {
+    option (google.api.http) = {
+      delete: "/api/v1/reimbursement-notes/{id}"
+    };
+  }
+
+  // Mirrors ReimbursementNoteController@approvalLogUpdate
+  rpc UpdateApprovalLog (UpdateApprovalLogRequest) returns (ReimbursementNoteResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/reimbursement-notes/{id}/approval-log"
+      body: "*"
+    };
+  }
+
+  // Mirrors ReimbursementNoteController@downloadNotePdf
+  rpc DownloadReimbursementNotePdf (DownloadReimbursementNotePdfRequest) returns (DownloadReimbursementNotePdfResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/reimbursement-notes/{id}/pdf"
+    };
+  }
+
+  // Mirrors ReimbursementNoteController@viewNotePdf
+  rpc ViewReimbursementNotePdf (DownloadReimbursementNotePdfRequest) returns (DownloadReimbursementNotePdfResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/reimbursement-notes/{id}/pdf/preview"
+    };
+  }
+
+  // Mirrors ReimbursementNoteController@paymentNote
+  rpc GetPaymentNoteDraftData (GetPaymentNoteDraftDataRequest) returns (PaymentNoteDraftDataResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/reimbursement-notes/{id}/payment-note"
+    };
+  }
+
+  // Mirrors ReimbursementNoteController@userSelection
+  rpc ListSelectableUsers (google.protobuf.Empty) returns (ListSelectableUsersResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/reimbursement-notes/users"
+    };
+  }
+
+  // Mirrors ReimbursementNoteController@selectUser
+  rpc SelectUserForReimbursement (SelectUserForReimbursementRequest) returns (SelectUserForReimbursementResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/reimbursement-notes/users/select"
+      body: "*"
+    };
+  }
+
+  // Mirrors ReimbursementNoteController@deleteFile
+  rpc DeleteReimbursementFile (DeleteReimbursementFileRequest) returns (ReimbursementNoteResponse) {
+    option (google.api.http) = {
+      delete: "/api/v1/reimbursement-notes/{id}/files/{filename}"
+    };
+  }
+
+  // Mirrors ReimbursementNoteController@reimbursementGenerateOrderNumber
+  rpc GenerateReimbursementOrderNumber (google.protobuf.Empty) returns (GenerateReimbursementOrderNumberResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/reimbursement-notes/order-number"
+    };
+  }
+
+  // Mirrors ReimbursementNoteController@paymentGenerateOrderNumber
+  rpc GenerateReimbursementPaymentOrderNumber (google.protobuf.Empty) returns (GenerateReimbursementPaymentOrderNumberResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/reimbursement-notes/payment-order-number"
+    };
+  }
+
+  // Simple gRPC health/test endpoint for automated tests
+  rpc TestReimbursementAPI (google.protobuf.Empty) returns (TestReimbursementAPIResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/reimbursement-notes/test"
+    };
+  }
+}
+
+// ---------- REQUEST MESSAGES ----------
+message ListReimbursementNotesRequest {
+  string status = 1;                  // Filter by status (default "S")
+  bool include_all = 2;               // When true, ignore status filter
+  int64 auth_user_id = 3;             // Requesting user id
+  repeated string user_roles = 4;     // Role names for access checks
+  bool only_assigned = 5;             // Restrict to reviewer assignments
+  bool drafts_only = 6;               // List drafts only
+  string search = 7;                  // Free-text search keyword
+  string sort_by = 8;                 // Column for sorting
+  string sort_direction = 9;          // asc/desc
+  int32 page = 10;                    // Pagination page number
+  int32 per_page = 11;                // Pagination size
+}
+
+message ListReimbursementNotesDataTableRequest {
+  int32 draw = 1;
+  int32 start = 2;
+  int32 length = 3;
+  string order_column = 4;
+  string order_direction = 5;
+  string search_value = 6;
+  string status = 7;
+  int64 auth_user_id = 8;
+  repeated string user_roles = 9;
+}
+
+message GetReimbursementNoteRequest {
+  int64 id = 1;
+}
+
+message GetReimbursementCreateDataRequest {
+  int64 selected_user_id = 1;        // Optional preselected user
+}
+
+message CreateReimbursementNoteRequest {
+  ReimbursementNotePayload note = 1;
+  repeated ReimbursementExpenseInput expenses = 2;
+  repeated FileUpload attachments = 3;
+}
+
+message GetReimbursementEditDataRequest {
+  int64 id = 1;
+}
+
+message UpdateReimbursementNoteRequest {
+  int64 id = 1;
+  ReimbursementNotePayload note = 2;
+  repeated ReimbursementExpenseInput expenses = 3;
+  repeated FileUpload new_attachments = 4;
+  repeated string remove_files = 5;   // Filenames to remove
+}
+
+message DeleteReimbursementNoteRequest {
+  int64 id = 1;
+}
+
+message UpdateApprovalLogRequest {
+  int64 id = 1;
+  string status = 2;                 // A, R, etc.
+  string remarks = 3;
+  int64 reviewer_id = 4;
+}
+
+message DownloadReimbursementNotePdfRequest {
+  int64 id = 1;
+}
+
+message GetPaymentNoteDraftDataRequest {
+  int64 id = 1;
+}
+
+message SelectUserForReimbursementRequest {
+  int64 user_id = 1;
+}
+
+message SelectUserForReimbursementResponse {
+  bool success = 1;
+  int64 selected_user_id = 2;
+}
+
+message DeleteReimbursementFileRequest {
+  int64 id = 1;
+  string filename = 2;
+}
+
+// ---------- SHARED INPUT STRUCTURES ----------
+message ReimbursementNotePayload {
+  int64 user_id = 1;
+  int64 select_user_id = 2;
+  int64 project_id = 3;
+  string note_no = 4;
+  string date_of_travel = 5;          // ISO-8601
+  string mode_of_travel = 6;
+  string travel_mode_eligibility = 7;
+  int64 approver_id = 8;
+  string approver_designation = 9;
+  string approval_date = 10;          // ISO-8601
+  string purpose_of_travel = 11;
+  double adjusted = 12;
+  string account_holder = 13;
+  string bank_name = 14;
+  string bank_account = 15;
+  string ifsc_code = 16;
+  string status = 17;                 // D, P, A, R, S, B, PNA, PA, PD
+}
+
+message ReimbursementExpenseInput {
+  string expense_type = 1;
+  string bill_date = 2;               // ISO-8601
+  string bill_number = 3;
+  int64 vendor_id = 4;
+  string vendor_name = 5;
+  double bill_amount = 6;
+  string supporting_available = 7;
+  string remarks = 8;
+}
+
+message FileUpload {
+  string name = 1;
+  string original_filename = 2;
+  string mime_type = 3;
+  bytes file_content = 4;             // Raw file bytes (base64 over JSON)
+}
+
+// ---------- RESPONSE MESSAGES ----------
+message ListReimbursementNotesResponse {
+  repeated ReimbursementNoteListItem notes = 1;
+  Pagination pagination = 2;
+}
+
+message ListReimbursementNotesDataTableResponse {
+  int32 draw = 1;
+  int64 total_records = 2;
+  int64 total_display_records = 3;
+  repeated ReimbursementNoteListItem notes = 4;
+}
+
+message ReimbursementNoteResponse {
+  ReimbursementNote note = 1;
+}
+
+message ReimbursementCreateDataResponse {
+  string order_number = 1;
+  ReimbursementUser user = 2;
+  repeated ProjectOption projects = 3;
+  repeated VendorSummary vendors = 4;
+  repeated DepartmentOption departments = 5;
+  repeated ApproverOption approvers = 6;
+}
+
+message ReimbursementEditDataResponse {
+  ReimbursementNote note = 1;
+  repeated ProjectOption projects = 2;
+  repeated VendorSummary vendors = 3;
+  repeated DepartmentOption departments = 4;
+  repeated ApproverOption approvers = 5;
+}
+
+message PaymentNoteDraftDataResponse {
+  string payment_order_number = 1;
+  double gross_amount = 2;
+  ReimbursementNote note = 3;
+}
+
+message ListSelectableUsersResponse {
+  repeated ReimbursementUser users = 1;
+}
+
+message DownloadReimbursementNotePdfResponse {
+  bytes file_content = 1;
+  string filename = 2;
+  string content_type = 3;
+}
+
+message GenerateReimbursementOrderNumberResponse {
+  string order_number = 1;
+  string financial_year = 2;
+}
+
+message GenerateReimbursementPaymentOrderNumberResponse {
+  string order_number = 1;
+  string financial_year = 2;
+}
+
+message TestReimbursementAPIResponse {
+  string status = 1;   // e.g. "ok"
+  string message = 2;  // Diagnostic string
+  int64 timestamp = 3; // Unix epoch seconds
+}
+
+// ---------- DATA STRUCTURES ----------
+message ReimbursementNoteListItem {
+  int64 id = 1;
+  string note_no = 2;
+  string status = 3;
+  string created_at = 4;
+  double net_payable = 5;
+  ProjectReference project = 6;
+  ReimbursementUser employee = 7;
+  string status_badge_html = 8;       // Optional pre-rendered badge
+}
+
+message ReimbursementNote {
+  int64 id = 1;
+  string note_no = 2;
+  string status = 3;
+  string date_of_travel = 4;
+  string mode_of_travel = 5;
+  string travel_mode_eligibility = 6;
+  string purpose_of_travel = 7;
+  double adjusted = 8;
+  string account_holder = 9;
+  string bank_name = 10;
+  string bank_account = 11;
+  string ifsc_code = 12;
+  string approval_date = 13;
+  string approver_designation = 14;
+  string created_at = 15;
+  string updated_at = 16;
+  double total_expense_amount = 17;
+  double net_payable = 18;
+  ReimbursementUser requester = 19;
+  ReimbursementUser selected_user = 20;
+  ReimbursementUser approver = 21;
+  ProjectReference project = 22;
+  repeated ReimbursementExpense expenses = 23;
+  repeated StoredFile attachments = 24;
+  repeated ReimbursementApprovalLog approval_logs = 25;
+}
+
+message ReimbursementExpense {
+  int64 id = 1;
+  string expense_type = 2;
+  string bill_date = 3;
+  string bill_number = 4;
+  string vendor_name = 5;
+  double bill_amount = 6;
+  string supporting_available = 7;
+  string remarks = 8;
+}
+
+message ReimbursementApprovalLog {
+  int64 id = 1;
+  string status = 2;
+  string comments = 3;
+  string created_at = 4;
+  ReimbursementUser reviewer = 5;
+}
+
+message StoredFile {
+  string filename = 1;
+  string url = 2;
+  string mime_type = 3;
+  int64 size_bytes = 4;
+  string uploaded_at = 5;
+}
+
+message ReimbursementUser {
+  int64 id = 1;
+  string name = 2;
+  string email = 3;
+  DepartmentOption department = 4;
+  string designation = 5;
+  bool active = 6;
+}
+
+message ProjectReference {
+  int64 id = 1;
+  string project = 2;
+}
+
+message ProjectOption {
+  int64 id = 1;
+  string project = 2;
+  int64 total_records = 3;
+}
+
+message DepartmentOption {
+  int64 id = 1;
+  string name = 2;
+}
+
+message ApproverOption {
+  int64 id = 1;
+  string name = 2;
+  string email = 3;
+  string designation = 4;
+}
+
+message VendorSummary {
+  int64 id = 1;
+  string vendor_name = 2;
+  string project = 3;
+  string account_number = 4;
+  string name_of_bank = 5;
+  string ifsc_code = 6;
+}
+
+// ---------- PAGINATION ----------
+message Pagination {
+  int32 page = 1;
+  int32 per_page = 2;
+  int64 total_items = 3;
+  int32 total_pages = 4;
+}

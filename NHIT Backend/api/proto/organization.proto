@@ -1,0 +1,282 @@
+syntax = "proto3";
+
+package organizations;
+
+option go_package = "github.com/ShristiRnr/NHIT_Backend/api/pb/organizationpb";
+
+import "google/protobuf/timestamp.proto";
+import "google/api/annotations.proto";
+
+
+// ====================
+// Organization Status
+// ====================
+// Represents if an organization is active or deactivated.
+enum OrganizationStatus {
+  activated = 0;
+  deactivated = 1;
+}
+
+
+// ====================
+// Super Admin (Parent Only)
+// ====================
+// Super admin is ONLY required during system onboarding
+// when creating the first parent organization.
+// Child organizations will NEVER use this.
+message SuperAdminDetails {
+  string name = 1;
+  string email = 2;
+  string password = 3;
+}
+
+
+// ====================
+// Project Entity (for organization integration)
+// ====================
+message Project {
+  string project_id = 1;
+  string tenant_id = 2;
+  string org_id = 3;
+  string project_name = 4;
+  string created_by = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp updated_at = 7;
+}
+
+// ====================
+// Organization Entity
+// ====================
+// This represents both Parent and Child organizations.
+// A Parent Organization always has:
+//   - parent_org_id = ""
+//   - super_admin field filled
+//   - initial projects
+//
+// A Child Organization always has:
+//   - parent_org_id = <id of parent org>
+//   - super_admin = null
+//   - its own project list
+message Organization {
+  string org_id = 1;                // Unique organization ID
+  string tenant_id = 2;             // Tenant linkage for multi-tenancy architecture
+
+  string parent_org_id = 3;         // EMPTY → Parent organization
+                                    // NOT EMPTY → Child organization
+
+  string name = 4;                  // Organization name
+  string code = 5;                  // Unique organization code (also used for DB name generation)
+  string database_name = 6;         // Auto-generated unique DB name for each org
+  string description = 7;           // Description (optional)
+  string logo = 8;                  // Logo upload path
+
+  SuperAdminDetails super_admin = 9;   // ONLY for parent organization; null for children
+
+  repeated string initial_projects = 10; // Projects belonging to this org (parent/child both have)
+
+  OrganizationStatus status = 11;      // activated/deactivated
+
+  google.protobuf.Timestamp created_at = 12;
+  google.protobuf.Timestamp updated_at = 13;
+  string created_by = 14;
+}
+
+
+
+// ====================
+// Create Organization Request
+// ====================
+// This request is used for:
+//   (1) Creating the FIRST parent organization (during onboarding)
+//   (2) Creating child organizations (from dashboard)
+//
+// Rules:
+// - parent_org_id = "" → Parent org creation (super_admin required)
+// - parent_org_id != "" → Child org creation (super_admin ignored)
+message CreateOrganizationRequest {
+  string name = 1;                  // Required for both parent + child
+  string code = 2;                  // Required
+  string description = 3;           // Optional
+  string logo = 4;                  // Optional
+
+  string parent_org_id = 5;         // Child Org MUST provide this
+                                    // Parent Org leaves empty
+
+  SuperAdminDetails super_admin = 6;  // Only parent org fills this
+
+  repeated string initial_projects = 7; // List of initial projects
+  OrganizationStatus status = 8;        // Default: activated
+}
+
+
+// ====================
+// Generic Organization Response
+// ====================
+message OrganizationResponse {
+  Organization organization = 1;
+  string message = 2;                   // Helpful messages like "Created", "Updated" etc.
+}
+
+
+
+// ====================
+// Other Request Messages
+// ====================
+message GetOrganizationRequest {
+  string org_id = 1;                   // Fetch a specific org by ID
+}
+
+message GetOrganizationWithProjectsRequest {
+  string org_id = 1;                   // Fetch org with its projects
+}
+
+message GetOrganizationWithProjectsResponse {
+  Organization organization = 1;
+  repeated Project projects = 2;        // Projects belonging to this organization
+}
+
+message UpdateOrganizationRequest {
+  string org_id = 1;                   // ID to update
+  string name = 2;
+  string code = 3;
+  string description = 4;
+  string logo = 5;
+  OrganizationStatus status = 6;
+}
+
+message DeleteOrganizationRequest {
+  string org_id = 1;                   // ID to delete
+}
+
+message DeleteOrganizationResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message ListOrganizationsRequest {
+  int32 page = 1;                      // Pagination page number
+  int32 page_size = 2;                 // Items per page
+}
+
+message ListOrganizationsByTenantRequest {
+  string tenant_id = 1;                // Tenant ID
+  int32 page = 2;
+  int32 page_size = 3;
+}
+
+message ListChildOrganizationsRequest {
+  string parent_org_id = 1;            // Parent org whose children you want to list
+  int32 page = 2;
+  int32 page_size = 3;
+}
+
+message GetOrganizationByCodeRequest {
+  string code = 1;                     // Fetch org via unique code
+}
+
+
+// ====================
+// Pagination Model
+// ====================
+message PaginationMetadata {
+  int32 current_page = 1;
+  int32 page_size = 2;
+  int32 total_items = 3;
+  int32 total_pages = 4;
+}
+
+message ListOrganizationsResponse {
+  repeated Organization organizations = 1;  // List of orgs returned
+  int32 total_count = 2;                    // Total count
+  PaginationMetadata pagination = 3;        // Pagination info
+}
+
+
+// ====================
+// Organization Service
+// ====================
+service OrganizationService {
+
+  rpc CreateOrganization(CreateOrganizationRequest) returns (OrganizationResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/organizations"
+      body: "*"
+    };
+  }
+
+  rpc ListOrganizations(ListOrganizationsRequest) returns (ListOrganizationsResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/organizations"
+    };
+  }
+
+  rpc ListOrganizationsByTenant(ListOrganizationsByTenantRequest) returns (ListOrganizationsResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/tenants/{tenant_id}/organizations"
+    };
+  }
+
+  rpc ListChildOrganizations(ListChildOrganizationsRequest) returns (ListOrganizationsResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/organizations/{parent_org_id}/children"
+    };
+  }
+
+  rpc GetOrganization(GetOrganizationRequest) returns (OrganizationResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/organizations/{org_id}"
+    };
+  }
+
+  rpc GetOrganizationWithProjects(GetOrganizationWithProjectsRequest) returns (GetOrganizationWithProjectsResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/organizations/{org_id}/with-projects"
+    };
+  }
+
+  rpc GetOrganizationByCode(GetOrganizationByCodeRequest) returns (OrganizationResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/organizations/code/{code}"
+    };
+  }
+
+  rpc UpdateOrganization(UpdateOrganizationRequest) returns (OrganizationResponse) {
+    option (google.api.http) = {
+      put: "/api/v1/organizations/{org_id}"
+      body: "*"
+    };
+  }
+
+  rpc DeleteOrganization(DeleteOrganizationRequest) returns (DeleteOrganizationResponse) {
+    option (google.api.http) = {
+      delete: "/api/v1/organizations/{org_id}"
+    };
+  }
+
+  // Upload Organization Logo
+  rpc UploadOrganizationLogo(UploadLogoRequest) returns (UploadLogoResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/organizations/{org_id}/logo"
+      body: "*"
+    };
+  }
+}
+
+// ====================
+// Logo Upload Messages
+// ====================
+message UploadLogoRequest {
+  string org_id = 1;
+  bytes file_content = 2;
+}
+
+message UploadLogoResponse {
+  bool success = 1;
+  string message = 2;
+  string organization_id = 3;
+  string logo_url = 4;
+  string file_name = 5;
+  string mime_type = 6;
+  int64 file_size = 7;
+  google.protobuf.Timestamp uploaded_at = 8;
+}

@@ -1,0 +1,419 @@
+syntax = "proto3";
+package greennote;
+option go_package = "github.com/ShristiRnr/Nhit-Note/api/pb/greennotepb;greennotepb";
+
+import "google/api/annotations.proto";
+import "google/protobuf/timestamp.proto";
+
+// =======================
+// SERVICE
+// =======================
+service GreenNoteService {
+  // Create
+  rpc CreateGreenNote (CreateGreenNoteRequest) returns (GreenNoteResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/green-notes"
+      body: "*"
+    };
+  }
+
+  // Get full detail by ID
+  rpc GetGreenNote (GetGreenNoteRequest) returns (GreenNoteDetailResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/green-notes/{id}"
+    };
+  }
+
+  // List (light view)
+  rpc ListGreenNotes (ListGreenNotesRequest) returns (ListGreenNotesResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/green-notes"
+    };
+  }
+
+  // Update
+  rpc UpdateGreenNote (UpdateGreenNoteRequest) returns (GreenNoteResponse) {
+    option (google.api.http) = {
+      patch: "/api/v1/green-notes/{id}"
+      body: "*"
+    };
+  }
+
+  // Cancel (not delete)
+  rpc CancelGreenNote (CancelGreenNoteRequest) returns (GreenNoteResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/green-notes/{id}/cancel"
+      body: "*"
+    };
+  }
+
+  // Get projects for the logged-in user's organization
+  rpc GetOrganizationProjects (GetOrganizationProjectsRequest) returns (GetOrganizationProjectsResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/organization/projects"
+    };
+  }
+
+  // Get vendors (suppliers) for the logged-in user's organization
+  rpc GetOrganizationVendors (GetOrganizationVendorsRequest) returns (GetOrganizationVendorsResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/organization/vendors"
+    };
+  }
+
+  // Get departments for the logged-in user's organization
+  rpc GetOrganizationDepartments (GetOrganizationDepartmentsRequest) returns (GetOrganizationDepartmentsResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/organization/departments"
+    };
+  }
+
+  // Upload GreenNote Documents
+  rpc UploadGreenNoteDocuments (UploadGreenNoteDocumentsRequest) returns (UploadGreenNoteDocumentsResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/green-notes/{note_id}/documents"
+      body: "*"
+    };
+  }
+
+  // Link a Green Note to a Payment Note
+  rpc LinkPaymentNote (LinkPaymentNoteRequest) returns (GreenNoteResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/green-notes/{id}/link-payment"
+      body: "*"
+    };
+  }
+}
+
+// =======================
+// REQUEST MODELS
+// =======================
+message CreateGreenNoteRequest {
+  GreenNotePayload note = 1;
+}
+
+message UpdateGreenNoteRequest {
+  string id = 1;
+  GreenNotePayload note = 2;
+}
+
+message GetGreenNoteRequest {
+  string id  = 1;
+}
+
+message CancelGreenNoteRequest {
+  string id  = 1;
+  string cancel_reason = 2;
+}
+
+message ListGreenNotesRequest {
+  Status status = 1; 
+  int32 page = 2;
+  int32 per_page = 3;
+  bool include_all = 4;
+}
+
+message LinkPaymentNoteRequest {
+  string id = 1;
+  string payment_note_id = 2;
+}
+
+// =======================
+// LIST VIEW ITEM (LIGHTWEIGHT)
+// =======================
+message GreenNoteListItem {
+  string id  = 1;
+  string project_name = 2;
+  string vendor_name = 3;
+  double amount = 4;        // total_amount
+  string date = 5;          // formatted created_at
+  Status status = 6;        // P, A, R, D
+  string approval_levels = 7;
+  string payment_note_id = 8;
+}
+
+// =======================
+// FULL PAYLOAD (DETAIL VIEW)
+// =======================
+message GreenNotePayload {
+  string project_name = 1;
+
+  string supplier_name = 2;
+
+  string expense_category = 3;
+  string org_id = 4;
+  string tenant_id = 5;
+  repeated SupportingDocument existing_documents = 6;
+
+  YesNo protest_note_raised = 7;                   
+  YesNo whether_contract = 8;                      
+  YesNo extension_of_contract_period_executed = 9; 
+  YesNo expense_amount_within_contract = 10;       
+  YesNo milestone_achieved = 11;                   
+  YesNo payment_approved_with_deviation = 12;      
+  YesNo required_documents_submitted = 13;         
+
+  string documents_verified = 14;
+
+  string contract_start_date = 15;
+  string contract_end_date = 16;
+  string appointed_start_date = 17;
+  string supply_period_start = 18;
+  string supply_period_end = 19;
+
+  double base_value = 20;
+  double other_charges = 21;
+  double gst = 22;
+  double total_amount = 23;
+
+  InvoiceInput invoice = 24;
+
+  bool enable_multiple_invoices = 25;
+  repeated InvoiceInput invoices = 26;
+
+  Status status = 27;
+
+  // Basic information
+  ApprovalFor approval_for = 28;
+
+  // Project details
+  string department_name = 29; // user_department display name
+
+  string work_order_no = 31;      // Work/Purchase Order no
+  string po_number = 32;          // PO Number (if different from order no)
+  string work_order_date = 33;    // Work/Purchase Order date
+
+  // Expense category (enum representation for UI dropdown)
+  ExpenseCategoryType expense_category_type = 34;
+
+  // Supplier & classification
+  string msme_classification = 35;
+  string activity_type = 36;
+
+  // Additional information
+  string brief_of_goods_services = 37;
+  string delayed_damages = 38;
+  NatureOfExpenses nature_of_expenses = 39;
+
+  // Contract details
+  YesNo contract_period_completed = 40; // Yes / No
+
+  // Budget information
+  double budget_expenditure = 41;
+  double actual_expenditure = 42;
+  double expenditure_over_budget = 43; // actual - budget (over = +ve, under = -ve)
+
+  // Contract extension & compliance
+  string milestone_remarks = 44;
+  string specify_deviation = 45;
+
+  // HR department (optional)
+  string documents_workdone_supply = 46;
+  string documents_discrepancy = 47;
+  string remarks = 48;
+  string auditor_remarks = 49;
+  double amount_retained_for_non_submission = 50;
+
+  google.protobuf.Timestamp created_at = 51;
+  google.protobuf.Timestamp updated_at = 52;
+
+  // Categorized Documents (Special Sections)
+  SupportingDocumentUpload additional_info_document = 53;
+  SupportingDocumentUpload contract_extension_document = 54;
+  SupportingDocumentUpload hr_department_document = 55;
+  string detailed_status = 56;
+  string approval_levels = 61;
+
+  // Approver details
+  string approver_name = 57;
+  string approver_designation = 58;
+  string approver_role = 59;
+  google.protobuf.Timestamp approved_at = 60;
+  string payment_note_id = 62;
+}
+
+message InvoiceInput {
+  string invoice_number = 1;
+  string invoice_date = 2;
+  double taxable_value = 3;
+  double gst = 4;
+  double other_charges = 5;
+  double invoice_value = 6;
+}
+
+enum ApprovalFor {
+  APPROVAL_FOR_UNSPECIFIED = 0;
+  APPROVAL_FOR_INVOICE = 1;
+  APPROVAL_FOR_ADVANCE = 2;
+  APPROVAL_FOR_ADHOC = 3;
+}
+
+enum ExpenseCategoryType {
+  EXPENSE_CATEGORY_UNSPECIFIED = 0;
+  EXPENSE_CATEGORY_CAPITAL = 1;
+  EXPENSE_CATEGORY_REVENUE = 2;
+  EXPENSE_CATEGORY_OPERATIONAL = 3;
+  EXPENSE_CATEGORY_ADMINISTRATIVE = 4;
+  EXPENSE_CATEGORY_MAINTENANCE = 5;
+}
+
+enum NatureOfExpenses {
+  NATURE_OF_EXPENSES_UNSPECIFIED = 0;
+  NATURE_OHC_001_MANPOWER = 1;
+  NATURE_OHC_002_STAFF_WELFARE = 2;
+  NATURE_OHC_003_OFFICE_RENT_UTILITIES = 3;
+}
+
+enum Status {
+  STATUS_PENDING = 0;
+  STATUS_APPROVED = 1;
+  STATUS_REJECTED = 2;
+  STATUS_DRAFT = 3;
+  STATUS_CANCELLED = 4;
+}
+
+enum YesNo {
+  YES_NO_UNSPECIFIED = 0;
+  YES = 1;
+  NO  = 2;
+}
+
+message SupportingDocument {
+  string id = 1;
+  string name = 2;
+  string original_filename = 3;
+  string mime_type = 4;
+  int64 file_size = 5;
+  string object_key = 6;
+  string document_type = 9; // e.g. "additional", "contract_extension", "hr"
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+}
+
+message SupportingDocumentUpload {
+  string name = 1;
+  string original_filename = 2;
+  string mime_type = 3;
+  bytes file_content = 4;
+  string document_type = 5;
+  string id = 6;
+  string object_key = 7;
+}
+
+// =======================
+// ORGANIZATION DATA REQUESTS/RESPONSES
+// =======================
+
+message GetOrganizationProjectsRequest {
+  // No parameters needed - uses authenticated user's organization context
+}
+
+message GetOrganizationProjectsResponse {
+  repeated Project projects = 1;
+  string message = 2;
+}
+
+message GetOrganizationVendorsRequest {
+  // No parameters needed - uses authenticated user's organization context
+}
+
+message GetOrganizationVendorsResponse {
+  repeated Vendor vendors = 1;
+  string message = 2;
+}
+
+message GetOrganizationDepartmentsRequest {
+  // No parameters needed - uses authenticated user's organization context
+}
+
+message GetOrganizationDepartmentsResponse {
+  repeated Department departments = 1;
+  string message = 2;
+}
+
+// =======================
+// ORGANIZATION DATA MODELS
+// =======================
+
+message Project {
+  string id = 1;
+  string name = 2;
+  string code = 3;
+  string status = 4;
+  string description = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp updated_at = 7;
+}
+
+message Vendor {
+  string id = 1;
+  string name = 2;
+  string code = 3;
+  string email = 4;
+  string phone = 5;
+  string contact_person = 6;
+  string status = 7;
+  string description = 8;
+  string msme_classification = 11;
+  string activity_type = 12;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp updated_at = 10;
+}
+
+message Department {
+  string id = 1;
+  string name = 2;
+  string code = 3;
+  string description = 4;
+  string head_name = 5;
+  string status = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+}
+
+// =======================
+// RESPONSES
+// =======================
+message GreenNoteResponse {
+  string id  = 1;
+  bool success = 2;
+  string message = 3;
+}
+
+message GreenNoteDetailResponse {
+  bool success = 1;
+  string message = 2;
+  GreenNotePayload data = 3;
+}
+
+message PaginationMetadata {
+  int32 current_page = 1;
+  int32 page_size = 2;
+  int64 total_items = 3;
+  int32 total_pages = 4;
+}
+
+message ListGreenNotesResponse {
+  repeated GreenNoteListItem notes = 1;
+  int32 page = 2;
+  int32 per_page = 3;
+  int64 total = 4;
+  PaginationMetadata pagination = 5;
+}
+
+// ====================
+// Document Upload Messages
+// ====================
+message UploadGreenNoteDocumentsRequest {
+  string note_id = 1;
+  repeated SupportingDocumentUpload documents = 2;
+}
+
+message UploadGreenNoteDocumentsResponse {
+  bool success = 1;
+  string message = 2;
+  string green_note_id = 3;
+  repeated SupportingDocument uploaded_documents = 4;
+  int32 total_uploaded = 5;
+  int64 total_size = 6;
+}

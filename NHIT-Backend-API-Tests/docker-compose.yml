@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  pytest-tests:
+    build:
+      context: ./python-pytest
+      dockerfile: Dockerfile
+    environment:
+      - API_BASE_URL=http://host.docker.internal:8080
+      - TEST_TENANT_ID=123e4567-e89b-12d3-a456-426614174000
+    volumes:
+      - ./python-pytest/reports:/app/reports
+    command: pytest -v --html=reports/report.html --self-contained-html
+    networks:
+      - test-network
+
+networks:
+  test-network:
+    driver: bridge

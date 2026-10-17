@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package approval;
+
+option go_package = "github.com/ShristiRnr/Nhit-Note/api/pb/approvalpb;approvalpb";
+
+service ApprovalService {
+  rpc InitiateApproval(InitiateApprovalRequest) returns (InitiateApprovalResponse);
+}
+
+message InitiateApprovalRequest {
+  string sl_no = 1;         // GreenNote ID
+  double amount = 2;        // Amount (Taxable + GST)
+  string department_id = 3;
+  string project_id = 4;
+  string created_by_user_id = 5;
+  string source_type = 6;
+}
+
+message InitiateApprovalResponse {
+  bool success = 1;
+  string message = 2;
+  string status = 3; // e.g. "PENDING_LEVEL_1"
+}

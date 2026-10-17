@@ -1,0 +1,480 @@
+syntax = "proto3";
+
+package vendor.v1;
+
+import "google/api/annotations.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/ShristiRnr/NHIT_Backend/api/pb/vendorpb";
+
+// Enums
+enum AccountType {
+  ACCOUNT_TYPE_UNSPECIFIED = 0;
+  INTERNAL = 1;
+  EXTERNAL = 2;
+}
+
+enum VendorStatus {
+  VENDOR_STATUS_UNSPECIFIED = 0;
+  ACTIVE = 1;
+  INACTIVE = 2;
+}
+
+enum MSMEClassification {
+  MSME_CLASSIFICATION_UNSPECIFIED = 0;
+  MICRO = 1;
+  SMALL = 2;
+  MEDIUM = 3;
+}
+
+// VendorService provides vendor management operations
+service VendorService {
+  // Vendor operations
+  rpc CreateVendor(CreateVendorRequest) returns (VendorResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/vendors"
+      body: "*"
+    };
+  }
+
+  rpc GetVendor(GetVendorRequest) returns (VendorResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/vendors/{vendor_id}"
+    };
+  }
+
+  rpc GetVendorByCode(GetVendorByCodeRequest) returns (VendorResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/vendors/code/{vendor_code}"
+    };
+  }
+
+  rpc UpdateVendor(UpdateVendorRequest) returns (VendorResponse) {
+    option (google.api.http) = {
+      put: "/api/v1/vendors/{vendor_id}"
+      body: "*"
+    };
+  }
+
+  rpc DeleteVendor(DeleteVendorRequest) returns (google.protobuf.Empty) {
+    option (google.api.http) = {
+      delete: "/api/v1/vendors/{vendor_id}"
+    };
+  }
+
+  rpc ListVendors(ListVendorsRequest) returns (ListVendorsResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/vendors"
+    };
+  }
+
+  // Vendor code operations
+  rpc GenerateVendorCode(GenerateVendorCodeRequest) returns (GenerateVendorCodeResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/vendors/generate-code"
+      body: "*"
+    };
+  }
+
+  rpc UpdateVendorCode(UpdateVendorCodeRequest) returns (VendorResponse) {
+    option (google.api.http) = {
+      put: "/api/v1/vendors/{vendor_id}/code"
+      body: "*"
+    };
+  }
+
+  rpc RegenerateVendorCode(RegenerateVendorCodeRequest) returns (VendorResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/vendors/{vendor_id}/regenerate-code"
+      body: "*"
+    };
+  }
+
+  // Account operations
+  rpc CreateVendorAccount(CreateVendorAccountRequest) returns (VendorAccountResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/vendors/{vendor_id}/accounts"
+      body: "*"
+    };
+  }
+
+  rpc GetVendorAccounts(GetVendorAccountsRequest) returns (GetVendorAccountsResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/vendors/{vendor_id}/accounts"
+    };
+  }
+
+  rpc GetVendorBankingDetails(GetVendorBankingDetailsRequest) returns (BankingDetailsResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/vendors/{vendor_id}/banking-details"
+    };
+  }
+
+  rpc UpdateVendorAccount(UpdateVendorAccountRequest) returns (VendorAccountResponse) {
+    option (google.api.http) = {
+      put: "/api/v1/vendors/accounts/{account_id}"
+      body: "*"
+    };
+  }
+
+  rpc DeleteVendorAccount(DeleteVendorAccountRequest) returns (google.protobuf.Empty) {
+    option (google.api.http) = {
+      delete: "/api/v1/vendors/accounts/{account_id}"
+    };
+  }
+
+  rpc ToggleAccountStatus(ToggleAccountStatusRequest) returns (VendorAccountResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/vendors/accounts/{account_id}/toggle-status"
+      body: "*"
+    };
+  }
+
+  // Dropdown endpoints
+  rpc GetProjectsDropdown(GetProjectsDropdownRequest) returns (GetProjectsDropdownResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/vendors/dropdowns/projects"
+    };
+  }
+
+  // Upload Vendor Document
+  rpc UploadVendorDocument(UploadVendorDocumentRequest) returns (UploadVendorDocumentResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/vendors/{vendor_id}/document"
+      body: "*"
+    };
+  }
+}
+
+// Messages
+message Vendor {
+  string id = 1;
+  string tenant_id = 2;
+  string org_id = 3;
+  string vendor_code = 4;
+  string vendor_name = 5;
+  string vendor_email = 6;
+  optional string vendor_mobile = 7;
+  string account_type = 8;
+  optional string vendor_nick_name = 9;
+  optional string activity_type = 10;
+  optional string gstin = 11;
+  string pan = 12;
+  optional string pin = 13;
+  optional string country_name = 14;
+  optional string state_name = 15;
+  optional string city_name = 16;
+  string msme_classification = 17;
+  optional string msme = 18;
+  optional string msme_registration_number = 19;
+  optional google.protobuf.Timestamp msme_start_date = 20;
+  optional google.protobuf.Timestamp msme_end_date = 21;
+  optional string material_nature = 22;
+  optional string gst_defaulted = 23;
+  optional string section_206ab_verified = 24;
+  string beneficiary_name = 25;
+  optional string remarks_address = 26;
+  optional string common_bank_details = 27;
+  optional string income_tax_type = 28;
+  optional string project = 29;
+  string status = 30;
+  optional string from_account_type = 31;
+  optional string account_name = 32;
+  optional string short_name = 33;
+  optional string parent = 34;
+  bool code_auto_generated = 35;
+  bool is_active = 36;
+  string created_by = 37;
+  google.protobuf.Timestamp created_at = 38;
+  google.protobuf.Timestamp updated_at = 39;
+    
+    // Banking details (for backward compatibility)
+  optional string name_of_bank = 40;
+  optional string ifsc_code = 41;
+  optional string address = 42;
+  optional string document_url = 43;
+}
+
+message VendorAccount {
+  string id = 1;
+  string vendor_id = 2;
+  string account_name = 3;
+  string account_number = 4;
+  optional string account_type = 5;
+  string name_of_bank = 6;
+  optional string branch_name = 7;
+  string ifsc_code = 8;
+  optional string swift_code = 9;
+  bool is_primary = 10;
+  bool is_active = 11;
+  optional string remarks = 12;
+  string created_by = 13;
+  google.protobuf.Timestamp created_at = 14;
+  google.protobuf.Timestamp updated_at = 15;
+}
+
+message BankingDetails {
+  string account_name = 1;
+  string account_number = 2;
+  optional string account_type = 3;
+  string name_of_bank = 4;
+  optional string branch_name = 5;
+  string ifsc_code = 6;
+  optional string swift_code = 7;
+  optional string remarks = 8;
+}
+
+// Request messages
+message CreateVendorRequest {
+  string tenant_id = 1 [json_name = "tenant_id"];
+  string org_id = 2 [json_name = "org_id"];
+  string vendor_name = 3 [json_name = "vendor_name"];
+  string vendor_email = 4 [json_name = "vendor_email"];
+  optional string vendor_mobile = 5 [json_name = "vendor_mobile"];
+  string account_type = 6 [json_name = "account_type"];
+  optional string vendor_nick_name = 7 [json_name = "vendor_nick_name"];
+  optional string activity_type = 8 [json_name = "activity_type"];
+  optional string gstin = 9;
+  string pan = 10;
+  optional string pin = 11;
+  optional string country_name = 12 [json_name = "country_name"];
+  optional string state_name = 13 [json_name = "state_name"];
+  optional string city_name = 14 [json_name = "city_name"];
+  string msme_classification = 15 [json_name = "msme_classification"];
+  optional string msme = 16;
+  optional string msme_registration_number = 17 [json_name = "msme_registration_number"];
+  optional string msme_start_date = 18 [json_name = "msme_start_date"];
+  optional string msme_end_date = 19 [json_name = "msme_end_date"];
+  optional string material_nature = 20 [json_name = "material_nature"];
+  optional string gst_defaulted = 21 [json_name = "gst_defaulted"];
+  optional string section_206ab_verified = 22 [json_name = "section_206ab_verified"];
+  string beneficiary_name = 23 [json_name = "beneficiary_name"];
+  optional string remarks_address = 24 [json_name = "remarks_address"];
+  optional string common_bank_details = 25 [json_name = "common_bank_details"];
+  optional string income_tax_type = 26 [json_name = "income_tax_type"];
+  optional string project = 27;
+  string status = 28 [json_name = "status"];
+  optional string from_account_type = 29 [json_name = "from_account_type"];
+  optional string account_name = 30 [json_name = "account_name"];
+  optional string short_name = 31 [json_name = "short_name"];
+  optional string parent = 32;
+  string created_by = 33 [json_name = "created_by"];
+      
+  optional string account_number = 34 [json_name = "account_number"];
+  optional string name_of_bank = 35 [json_name = "name_of_bank"];
+  optional string ifsc_code = 36 [json_name = "ifsc_code"];
+  optional string address = 37 [json_name = "address"];
+  optional string document_url = 38 [json_name = "document_url"];
+}
+
+message GetVendorRequest {
+  string tenant_id = 1;
+  string vendor_id = 2;
+}
+
+message GetVendorByCodeRequest {
+  string tenant_id = 1;
+  string vendor_code = 2;
+}
+
+message UpdateVendorRequest {
+  string tenant_id = 1;
+  string vendor_id = 2;
+  optional string vendor_name = 3;
+  optional string vendor_email = 4;
+  optional string vendor_mobile = 5;
+  optional string account_type = 6;
+  optional string vendor_nick_name = 7;
+  optional string activity_type = 8;
+  optional string gstin = 9;
+  optional string pan = 10;
+  optional string pin = 11;
+  optional string country_name = 12;
+  optional string state_name = 13;
+  optional string city_name = 14;
+  optional string msme_classification = 15;
+  optional string msme = 16;
+  optional string msme_registration_number = 17;
+  optional string msme_start_date = 18;
+  optional string msme_end_date = 19;
+  optional string material_nature = 20;
+  optional string gst_defaulted = 21;
+  optional string section_206ab_verified = 22;
+  optional string beneficiary_name = 23;
+  optional string remarks_address = 24;
+  optional string common_bank_details = 25;
+  optional string income_tax_type = 26;
+  optional string project = 27;
+  optional string status = 28;
+  optional string from_account_type = 29;
+  optional string account_name = 30;
+  optional string short_name = 31;
+  optional string parent = 32;
+  optional string document_url = 33;
+  optional bool is_active = 34;
+  optional string address = 35;
+  string updated_by = 36;
+}
+
+message DeleteVendorRequest {
+  string tenant_id = 1;
+  string vendor_id = 2;
+}
+
+message ListVendorsRequest {
+  string tenant_id = 1;
+  optional string org_id = 13;
+  optional string search = 2;
+  optional bool is_active = 3;
+  optional string account_type = 4;
+  optional string project = 5;
+  int32 limit = 6;
+  int32 offset = 7;
+  optional string sort_by = 8;
+  optional string sort_order = 9;
+  int32 page = 10;
+  int32 page_size = 11;
+  int32 per_page = 12;
+}
+
+message PaginationMetadata {
+  int32 current_page = 1;
+  int32 page_size = 2;
+  int64 total_items = 3;
+  int32 total_pages = 4;
+}
+
+message GenerateVendorCodeRequest {
+  string vendor_name = 1;
+  string account_type = 2;
+}
+
+message UpdateVendorCodeRequest {
+  string tenant_id = 1;
+  string vendor_id = 2;
+  string vendor_code = 3;
+}
+
+message RegenerateVendorCodeRequest {
+  string tenant_id = 1;
+  string vendor_id = 2;
+}
+
+message CreateVendorAccountRequest {
+  string vendor_id = 1;
+  string account_name = 2;
+  string account_number = 3;
+  optional string account_type = 4;
+  string name_of_bank = 5;
+  optional string branch_name = 6;
+  string ifsc_code = 7;
+  optional string swift_code = 8;
+  bool is_primary = 9;
+  optional string remarks = 10;
+  string created_by = 11;
+}
+
+message GetVendorAccountsRequest {
+  string vendor_id = 1;
+}
+
+message GetVendorBankingDetailsRequest {
+  string vendor_id = 1;
+  optional string account_id = 2;
+}
+
+message UpdateVendorAccountRequest {
+  string account_id = 1;
+  optional string account_name = 2;
+  optional string account_number = 3;
+  optional string account_type = 4;
+  optional string name_of_bank = 5;
+  optional string branch_name = 6;
+  optional string ifsc_code = 7;
+  optional string swift_code = 8;
+  optional bool is_primary = 9;
+  optional bool is_active = 10;
+  optional string remarks = 11;
+  string updated_by = 12;
+}
+
+message DeleteVendorAccountRequest {
+  string account_id = 1;
+}
+
+message ToggleAccountStatusRequest {
+  string account_id = 1;
+}
+
+// Response messages
+message VendorResponse {
+  Vendor vendor = 1;
+}
+
+message ListVendorsResponse {
+  repeated Vendor vendors = 1;
+  int64 total_count = 2;
+  PaginationMetadata pagination = 3;
+}
+
+message GenerateVendorCodeResponse {
+  string vendor_code = 1;
+}
+
+message VendorAccountResponse {
+  VendorAccount account = 1;
+}
+
+message GetVendorAccountsResponse {
+  repeated VendorAccount accounts = 1;
+}
+
+message BankingDetailsResponse {
+  BankingDetails banking_details = 1;
+}
+
+// Additional messages for VendorAccountController methods
+message GetVendorAccountRequest {
+  string account_id = 1;
+  optional string vendor_id = 2;
+}
+
+message SetPrimaryAccountRequest {
+  string account_id = 1;
+}
+
+// Dropdown messages
+message GetProjectsDropdownRequest {
+  // org_id will be extracted from JWT middleware
+}
+
+message ProjectDropdownItem {
+  string id = 1;
+  string name = 2;
+}
+
+message GetProjectsDropdownResponse {
+  repeated ProjectDropdownItem projects = 1;
+}
+
+// ====================
+// Vendor Signature Upload Messages
+// ====================
+message UploadVendorDocumentRequest {
+  string vendor_id = 1;
+  bytes file_content = 2;
+  string file_name = 3;
+  string mime_type = 4;
+}
+
+message UploadVendorDocumentResponse {
+  bool success = 1;
+  string message = 2;
+  string vendor_id = 3;
+  string document_url = 4;
+  string file_name = 5;
+  string mime_type = 6;
+  int64 file_size = 7;
+  google.protobuf.Timestamp uploaded_at = 8;
+}

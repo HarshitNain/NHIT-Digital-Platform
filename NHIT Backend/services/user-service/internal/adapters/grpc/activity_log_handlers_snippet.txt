@@ -1,0 +1,64 @@
+// CreateActivityLog creates a new activity log entry
+func (h *UserHandler) CreateActivityLog(ctx context.Context, req *userpb.CreateActivityLogRequest) (*userpb.ActivityLogResponse, error) {
+	log := &domain.ActivityLog{
+		Name:        req.Name,
+		Description: req.Description,
+	}
+
+	created, err := h.userService.CreateActivityLog(ctx, log)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to create activity log: %v", err)
+	}
+
+	return &userpb.ActivityLogResponse{
+		Id:          created.ID,
+		Name:        created.Name,
+		Description: created.Description,
+		CreatedAt:   timestamppb.New(created.CreatedAt),
+	}, nil
+}
+
+// ListActivityLogs lists activity logs
+func (h *UserHandler) ListActivityLogs(ctx context.Context, req *userpb.ListActivityLogsRequest) (*userpb.ListActivityLogsResponse, error) {
+	var limit, offset int32 = 10, 0
+	if req.Page != nil {
+		limit = req.Page.PageSize
+		offset = (req.Page.Page - 1) * req.Page.PageSize
+	}
+
+	logs, err := h.userService.ListActivityLogs(ctx, limit, offset)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to list activity logs: %v", err)
+	}
+
+	pbLogs := make([]*userpb.ActivityLog, len(logs))
+	for i, log := range logs {
+		pbLogs[i] = &userpb.ActivityLog{
+			Id:          log.ID,
+			Name:        log.Name,
+			Description: log.Description,
+			CreatedAt:   timestamppb.New(log.CreatedAt),
+		}
+	}
+
+	// Get total count for pagination
+	total, err := h.userService.activityLogRepo.Count(ctx)
+	if err != nil {
+		total = 0
+	}
+
+	totalPages := int32(total) / limit
+	if int32(total)%limit > 0 {
+		totalPages++
+	}
+
+	return &userpb.ListActivityLogsResponse{
+		Logs: pbLogs,
+		Pagination: &userpb.PageResponse{
+			Page:       req.Page.Page,
+			PageSize:   limit,
+			TotalPages: totalPages,
+			TotalItems: int32(total),
+		},
+	}, nil
+}

@@ -1,0 +1,489 @@
+syntax = "proto3";
+
+package paymentnote;
+
+option go_package = "github.com/ShristiRnr/Nhit-Note/api/pb/paymentnotepb;paymentnotepb";
+
+import "google/protobuf/empty.proto";
+import "google/api/annotations.proto";
+import "common.proto";
+
+// ---------- PAYMENT NOTE SERVICE ----------
+service PaymentNoteService {
+  // Mirrors PaymentNoteController@index
+  rpc ListPaymentNotes (ListPaymentNotesRequest) returns (ListPaymentNotesResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/payment-notes"
+    };
+  }
+
+  // Dedicated drafts listing (PaymentNoteController@drafts)
+  rpc ListDraftPaymentNotes (ListDraftPaymentNotesRequest) returns (ListPaymentNotesResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/payment-notes/drafts"
+    };
+  }
+
+  // Mirrors PaymentNoteController@show
+  rpc GetPaymentNote (GetPaymentNoteRequest) returns (PaymentNoteResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/payment-notes/{id}"
+    };
+  }
+
+  // Mirrors PaymentNoteController@store
+  rpc CreatePaymentNote (CreatePaymentNoteRequest) returns (PaymentNoteResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/payment-notes"
+      body: "*"
+    };
+  }
+
+  // Mirrors PaymentNoteController@update (status/full update)
+  rpc UpdatePaymentNote (UpdatePaymentNoteRequest) returns (PaymentNoteResponse) {
+    option (google.api.http) = {
+      patch: "/api/v1/payment-notes/{id}"
+      body: "*"
+    };
+  }
+
+  // Mirrors PaymentNoteController@destroy
+  rpc DeletePaymentNote (DeletePaymentNoteRequest) returns (google.protobuf.Empty) {
+    option (google.api.http) = {
+      delete: "/api/v1/payment-notes/{id}"
+    };
+  }
+
+  // Auto-create draft payment note on green note approval (PaymentNoteService@createDraftOnApproval)
+  rpc CreateDraftFromGreenNote (CreateDraftFromGreenNoteRequest) returns (PaymentNoteResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/payment-notes/draft"
+      body: "*"
+    };
+  }
+
+  // Convert draft into active payment note (PaymentNoteController@convertDraftToActive)
+  rpc ConvertDraftToActive (ConvertDraftToActiveRequest) returns (PaymentNoteResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/payment-notes/{id}/convert"
+      body: "*"
+    };
+  }
+
+  // Delete a draft payment note (PaymentNoteController@deleteDraft)
+  rpc DeleteDraftPaymentNote (DeleteDraftPaymentNoteRequest) returns (google.protobuf.Empty) {
+    option (google.api.http) = {
+      delete: "/api/v1/payment-notes/{id}/draft"
+    };
+  }
+
+  // Put payment note on hold (PaymentNoteController@putOnHold)
+  rpc PutPaymentNoteOnHold (PutPaymentNoteOnHoldRequest) returns (PaymentNoteResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/payment-notes/{id}/hold"
+      body: "*"
+    };
+  }
+
+  // Remove payment note from hold (PaymentNoteController@removeFromHold)
+  rpc RemovePaymentNoteFromHold (RemovePaymentNoteFromHoldRequest) returns (PaymentNoteResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/payment-notes/{id}/unhold"
+      body: "*"
+    };
+  }
+
+  // Update UTR information and trigger mail (PaymentNoteController@updateUtr)
+  rpc UpdatePaymentNoteUtr (UpdatePaymentNoteUtrRequest) returns (PaymentNoteResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/payment-notes/{id}/utr"
+      body: "*"
+    };
+  }
+
+  // Generate next payment note order number (PaymentNoteController@generatePaymentNoteOrderNumber)
+  rpc GeneratePaymentNoteOrderNumber (google.protobuf.Empty) returns (GeneratePaymentNoteOrderNumberResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/payment-notes/order-number"
+    };
+  }
+
+  // Download payment note PDF (PaymentNoteController@downloadGreenNotePdf)
+  rpc DownloadPaymentNotePdf (DownloadPaymentNotePdfRequest) returns (DownloadPaymentNotePdfResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/payment-notes/{id}/pdf"
+    };
+  }
+
+  // Super admin creation helper (PaymentNoteController@storeForSuperAdmin)
+  rpc CreatePaymentNoteForSuperAdmin (CreatePaymentNoteForSuperAdminRequest) returns (PaymentNoteResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/payment-notes/superadmin"
+      body: "*"
+    };
+  }
+
+  // Simple gRPC health/test endpoint for automated tests
+  rpc TestPaymentNoteAPI (google.protobuf.Empty) returns (TestPaymentNoteAPIResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/payment-notes/test"
+    };
+  }
+}
+
+// ---------- REQUEST MESSAGES ----------
+message ListPaymentNotesRequest {
+  string status = 1;                  // Optional status filter (default "S")
+  bool include_all = 2;               // Mirrors status=all behaviour
+  string auth_user_id = 3;            // Authenticated user id for scoping
+  repeated string user_roles = 4;     // Role names attached to auth user
+  bool only_assigned = 5;             // Restrict to approver assignments
+  bool drafts_only = 6;               // Return only draft notes when true
+  string search = 7;                  // Free-text search keyword
+  string sort_by = 8;                 // Column for sorting
+  string sort_direction = 9;          // asc/desc
+  int32 page = 10;                    // Pagination page number
+  int32 per_page = 11;                // Pagination page size
+}
+
+message ListDraftPaymentNotesRequest {
+  string auth_user_id = 1;
+  repeated string user_roles = 2;
+}
+
+message GetPaymentNoteRequest {
+  int64 id = 1;
+}
+
+message CreatePaymentNoteRequest {
+  PaymentNotePayload note = 1;
+}
+
+message UpdatePaymentNoteRequest {
+  int64 id = 1;
+  PaymentNotePayload note = 2;
+  bool status_only_edit = 3;          // Mirrors status-only update flow
+}
+
+message DeletePaymentNoteRequest {
+  int64 id = 1;
+}
+
+message CreateDraftFromGreenNoteRequest {
+  string green_note_id = 1;
+  string approver_id = 2;              // User who triggered creation
+}
+
+message ConvertDraftToActiveRequest {
+  int64 id = 1;
+  string user_id = 2;                  // User performing conversion
+}
+
+message DeleteDraftPaymentNoteRequest {
+  int64 id = 1;
+  string requester_id = 2;             // Used to validate permissions
+}
+
+message PutPaymentNoteOnHoldRequest {
+  int64 id = 1;
+  string hold_reason = 2;
+  string user_id = 3;
+}
+
+message RemovePaymentNoteFromHoldRequest {
+  int64 id = 1;
+  string new_status = 2;              // Next status after removal (P, D, S)
+  string user_id = 3;
+}
+
+message UpdatePaymentNoteUtrRequest {
+  int64 id = 1;
+  string utr_no = 2;
+  string utr_date = 3;                // ISO-8601 date string
+  bool notify_vendor = 4;
+}
+
+message DownloadPaymentNotePdfRequest {
+  int64 id = 1;
+}
+
+message CreatePaymentNoteForSuperAdminRequest {
+  string green_note_id = 1;
+  string subject = 2;
+  string recommendation_of_payment = 3;
+  bool create_as_draft = 4;
+  string actor_id = 5;
+}
+
+// ---------- SHARED INPUT STRUCTURES ----------
+message PaymentNotePayload {
+  string user_id = 1;
+  string green_note_id = 2;
+  int64 reimbursement_note_id = 3;
+  
+  // Payment Note Details
+  string note_no = 4;
+  string subject = 5;
+  string date = 6;                    // ISO-8601 date
+  string department = 7;
+  
+  // Green Note Reference
+  string green_note_no = 8;
+  string green_note_approver = 9;
+  string green_note_app_date = 10;
+  
+  // Vendor Details
+  string vendor_code = 11;
+  string vendor_name = 12;
+  
+  // Project Details
+  string project_name = 13;
+  
+  // Invoice Details
+  string invoice_no = 14;
+  string invoice_date = 15;
+  double invoice_amount = 16;
+  string invoice_approved_by = 17;
+  
+  // LOA/PO Details
+  string loa_po_no = 18;
+  double loa_po_amount = 19;
+  string loa_po_date = 20;
+  
+  // Financial Calculations
+  double gross_amount = 21;
+  double total_additions = 22;
+  double total_deductions = 23;
+  double net_payable_amount = 24;
+  double net_payable_round_off = 25;
+  string net_payable_words = 26;
+  
+  // TDS Details
+  double tds_percentage = 27;         // e.g., 2.00 for 2%
+  string tds_section = 28;            // e.g., "194C"
+  double tds_amount = 29;
+  
+  // Bank Details
+  string account_holder_name = 30;
+  string bank_name = 31;
+  string account_number = 32;
+  string ifsc_code = 33;
+  
+  // Particulars and Recommendation
+  repeated PaymentParticular add_particulars = 34;
+  repeated PaymentParticular less_particulars = 35;
+  string recommendation_of_payment = 36;
+  
+  // Status and Flags
+  string status = 37;                 // D, P, A, R, S, PD, etc.
+  bool is_draft = 38;
+  bool auto_created = 39;
+  string created_by = 40;
+  
+  // Hold Information
+  string hold_reason = 41;
+  string hold_date = 42;
+  string hold_by = 43;
+  
+  // UTR Information
+  string utr_no = 44;
+  string utr_date = 45;
+  bool send_notifications = 46;
+
+  // Maker Details
+  string created_by_name = 48;
+  string created_by_designation = 49;
+  string created_by_role = 50;
+  
+  // Financial Breakdown
+  double taxable_amount = 51;
+  double gst_amount = 52;
+  double other_charges = 53;
+  string green_note_history = 54;
+  
+  // Supporting Documents
+  repeated PaymentNoteDocumentUpload new_documents = 47;
+}
+
+message PaymentParticular {
+  string particular = 1;
+  double amount = 2;
+}
+
+// ---------- RESPONSE MESSAGES ----------
+message ListPaymentNotesResponse {
+  repeated PaymentNoteSummary notes = 1;
+  common.Pagination pagination = 2;
+}
+
+message PaymentNoteResponse {
+  PaymentNote note = 1;
+}
+
+message GeneratePaymentNoteOrderNumberResponse {
+  string order_number = 1;
+  string financial_year = 2;
+  string prefix = 3;
+}
+
+message DownloadPaymentNotePdfResponse {
+  bytes file_content = 1;
+  string filename = 2;
+  string content_type = 3;
+}
+
+message TestPaymentNoteAPIResponse {
+  string status = 1;    // e.g. "ok"
+  string message = 2;   // Human readable diagnostic
+  int64 timestamp = 3;  // Unix epoch seconds
+}
+
+// ---------- DATA STRUCTURES ----------
+message PaymentNoteSummary {
+  int64 id = 1;
+  string note_no = 2;
+  string status = 3;
+  double net_payable_round_off = 4;
+  bool is_draft = 5;
+  string created_at = 6;
+  string updated_at = 7;
+  common.PaymentGreenNoteReference green_note = 8;
+  common.PaymentReimbursementNoteReference reimbursement_note = 9;
+  common.RelatedUser owner = 10;
+}
+
+message PaymentNote {
+  int64 id = 1;
+  string user_id = 2;
+  string green_note_id = 3;
+  int64 reimbursement_note_id = 4;
+  string note_no = 5;
+  string subject = 6;
+  string date = 7;
+  string department = 8;
+  
+  // Green Note Reference
+  string green_note_no = 9;
+  string green_note_approver = 10;
+  string green_note_app_date = 11;
+  
+  // Vendor Details
+  string vendor_code = 12;
+  string vendor_name = 13;
+  
+  // Project Details
+  string project_name = 14;
+  
+  // Invoice Details
+  string invoice_no = 15;
+  string invoice_date = 16;
+  double invoice_amount = 17;
+  string invoice_approved_by = 18;
+  
+  // LOA/PO Details
+  string loa_po_no = 19;
+  double loa_po_amount = 20;
+  string loa_po_date = 21;
+  
+  // Financial Calculations
+  double gross_amount = 22;
+  double total_additions = 23;
+  double total_deductions = 24;
+  double net_payable_amount = 25;
+  double net_payable_round_off = 26;
+  string net_payable_words = 27;
+  
+  // TDS Details
+  double tds_percentage = 28;
+  string tds_section = 29;
+  double tds_amount = 30;
+  
+  // Bank Details
+  string account_holder_name = 31;
+  string bank_name = 32;
+  string account_number = 33;
+  string ifsc_code = 34;
+  
+  // Particulars and Recommendation
+  repeated PaymentParticular add_particulars = 35;
+  repeated PaymentParticular less_particulars = 36;
+  string recommendation_of_payment = 37;
+  
+  // Status and Flags
+  string status = 38;
+  bool is_draft = 39;
+  bool auto_created = 40;
+  string created_by = 41;
+  
+  // Hold Details
+  common.HoldDetails hold = 42;
+  
+  // UTR Information
+  string utr_no = 43;
+  string utr_date = 44;
+  
+  // Related Entities
+  repeated PaymentApprovalLog approval_logs = 45;
+  repeated PaymentNoteComment comments = 46;
+  repeated PaymentNoteDocument documents = 47;
+  common.PaymentGreenNoteReference green_note = 48;
+  common.PaymentReimbursementNoteReference reimbursement_note = 49;
+  common.RelatedUser owner = 50;
+  common.RelatedUser created_by_user = 51;
+  
+  // Maker Details
+  string created_by_name = 54;
+  string created_by_designation = 55;
+  string created_by_role = 56;
+
+  // Timestamps
+  string created_at = 52;
+  string updated_at = 53;
+
+  // Financial Breakdown
+  double taxable_amount = 57;
+  double gst_amount = 58;
+  double other_charges = 59;
+  string green_note_history = 60;
+  string green_note_url = 61;
+}
+
+message PaymentApprovalLog {
+  int64 id = 1;
+  string status = 2;
+  string comments = 3;
+  common.RelatedUser reviewer = 4;
+  string created_at = 5;
+  repeated common.PaymentApprovalPriority priorities = 6;
+  string reviewer_designation = 7;
+  string reviewer_role = 8;
+}
+
+message PaymentNoteComment {
+  int64 id = 1;
+  string comment = 2;
+  string status = 3;
+  common.RelatedUser user = 4;
+  string created_at = 5;
+  string user_designation = 6;
+  string user_role = 7;
+}
+
+message PaymentNoteDocument {
+  int64 id = 1;
+  string file_name = 2;
+  string original_filename = 3;
+  string mime_type = 4;
+  int64 file_size = 5;
+  string object_key = 6;
+  string uploaded_by = 7;
+  string uploaded_by_name = 8;
+  string created_at = 9;
+}
+
+message PaymentNoteDocumentUpload {
+  string file_name = 1;
+  string original_filename = 2;
+  string mime_type = 3;
+  bytes file_content = 4;
+}

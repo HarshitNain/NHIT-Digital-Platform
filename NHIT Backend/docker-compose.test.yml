@@ -1,0 +1,161 @@
+version: '3.8'
+
+# NHIT Backend - Test Environment Docker Compose
+# Use this for testing with isolated database and services
+
+services:
+  postgres-test:
+    image: postgres:15-alpine
+    container_name: nhit-postgres-test
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: shristi
+      POSTGRES_DB: nhit_db
+    ports:
+      - "5433:5432"  # Different port to avoid conflicts
+    volumes:
+      - postgres_test_data:/var/lib/postgresql/data
+      - ./scripts/consolidated-migrations.sql:/docker-entrypoint-initdb.d/01-migrations.sql
+      - ./scripts/seed-test-data.sql:/docker-entrypoint-initdb.d/02-seed-data.sql
+    networks:
+      - nhit-test-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d nhit_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  user-service-test:
+    build:
+      context: .
+      dockerfile: services/user-service/Dockerfile
+    container_name: nhit-user-service-test
+    environment:
+      SERVER_PORT: "50051"
+      DATABASE_URL: "postgres://postgres:shristi@postgres-test:5432/nhit_db?sslmode=disable"
+      JWT_SECRET: "test-secret-key-for-development-only"
+      ENVIRONMENT: "test"
+      DEBUG: "true"
+    ports:
+      - "50061:50051"  # Different external port for testing
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+    networks:
+      - nhit-test-network
+
+  auth-service-test:
+    build:
+      context: .
+      dockerfile: services/auth-service/Dockerfile
+    container_name: nhit-auth-service-test
+    environment:
+      SERVER_PORT: "50052"
+      DATABASE_URL: "postgres://postgres:shristi@postgres-test:5432/nhit_db?sslmode=disable"
+      JWT_SECRET: "test-secret-key-for-development-only"
+      JWT_EXPIRY: "15m"
+      REFRESH_TOKEN_EXPIRY: "168h"
+      USER_SERVICE_URL: "user-service-test:50051"
+      ENVIRONMENT: "test"
+      DEBUG: "true"
+    ports:
+      - "50062:50052"
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+      user-service-test:
+        condition: service_started
+    networks:
+      - nhit-test-network
+
+  organization-service-test:
+    build:
+      context: .
+      dockerfile: services/organization-service/Dockerfile
+    container_name: nhit-organization-service-test
+    environment:
+      SERVER_PORT: "50053"
+      DATABASE_URL: "postgres://postgres:shristi@postgres-test:5433/nhit_db?sslmode=disable"
+      USER_SERVICE_URL: "user-service-test:50051"
+      ENVIRONMENT: "test"
+      DEBUG: "true"
+    ports:
+      - "50063:50053"
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+      user-service-test:
+        condition: service_started
+    networks:
+      - nhit-test-network
+
+  department-service-test:
+    build:
+      context: .
+      dockerfile: services/department-service/Dockerfile
+    container_name: nhit-department-service-test
+    environment:
+      SERVER_PORT: "50054"
+      DATABASE_URL: "postgres://postgres:shristi@postgres-test:5433/nhit_db?sslmode=disable"
+      USER_SERVICE_URL: "user-service-test:50051"
+      ENVIRONMENT: "test"
+      DEBUG: "true"
+    ports:
+      - "50064:50054"
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+      user-service-test:
+        condition: service_started
+    networks:
+      - nhit-test-network
+
+  designation-service-test:
+    build:
+      context: .
+      dockerfile: services/designation-service/Dockerfile
+    container_name: nhit-designation-service-test
+    environment:
+      DATABASE_URL: "postgres://postgres:shristi@postgres-test:5433/nhit_db?sslmode=disable"
+      PORT: "50055"
+      ENVIRONMENT: "test"
+      DEBUG: "true"
+    ports:
+      - "50065:50055"
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+    networks:
+      - nhit-test-network
+
+  api-gateway-test:
+    build:
+      context: .
+      dockerfile: services/api-gateway/Dockerfile
+    container_name: nhit-api-gateway-test
+    environment:
+      SERVER_PORT: "8080"
+      USER_SERVICE_URL: "user-service-test:50051"
+      AUTH_SERVICE_URL: "auth-service-test:50052"
+      ORG_SERVICE_URL: "organization-service-test:50053"
+      DEPT_SERVICE_URL: "department-service-test:50054"
+      DESIGNATION_SERVICE_URL: "designation-service-test:50055"
+      ENVIRONMENT: "test"
+      DEBUG: "true"
+    ports:
+      - "8090:8080"  # Different port for testing
+    depends_on:
+      - user-service-test
+      - auth-service-test
+      - organization-service-test
+      - department-service-test
+      - designation-service-test
+    networks:
+      - nhit-test-network
+
+volumes:
+  postgres_test_data:
+
+networks:
+  nhit-test-network:
+    driver: bridge

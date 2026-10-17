@@ -1,0 +1,13 @@
+version: "2"
+
+sql:
+  - engine: "postgresql"
+    schema: "migrations"
+    queries: "internal/adapters/repository/sqlc/queries"
+    gen:
+      go:
+        package: "sqlcgen"
+        out: "internal/adapters/repository/sqlc/generated"
+        overrides:
+          - db_type: "uuid"
+            go_type: "string"

@@ -1,0 +1,456 @@
+syntax = "proto3";
+
+package potracking;
+
+option go_package = "github.com/ShristiRnr/Nhit-Note/api/pb/potrackingpb;potrackingpb";
+
+// ---------- IMPORTS ----------
+import "google/protobuf/empty.proto";
+import "google/api/annotations.proto";
+import "common.proto";
+
+// ---------- SERVICE: PO TRACKING ----------
+service POTrackingService {
+  // Get or create PO tracking record (INTERNAL ONLY - No HTTP endpoint)
+  rpc GetOrCreatePOTracking (GetOrCreatePOTrackingRequest) returns (POTrackingResponse);
+
+  // Get PO details by order number (INTERNAL ONLY - No HTTP endpoint)
+  rpc GetPOByOrderNumber (GetPORequest) returns (POTrackingResponse);
+
+  // Calculate expenditure values for a green note (INTERNAL ONLY - No HTTP endpoint)
+  rpc CalculateExpenditures (CalculateExpendituresRequest) returns (CalculateExpendituresResponse);
+
+  // Update PO utilization after green note creation/update (INTERNAL ONLY - No HTTP endpoint)
+  rpc UpdatePOUtilization (UpdatePOUtilizationRequest) returns (google.protobuf.Empty);
+
+  // Validate if PO has sufficient budget (INTERNAL ONLY - No HTTP endpoint)
+  rpc ValidatePOBudget (ValidatePOBudgetRequest) returns (ValidatePOBudgetResponse);
+
+  // Get PO utilization summary (INTERNAL ONLY - No HTTP endpoint)
+  rpc GetPOSummary (GetPORequest) returns (GetPOSummaryResponse);
+
+  // Recalculate all PO tracking records (INTERNAL ONLY - No HTTP endpoint)
+  rpc RecalculateAllPOTracking (google.protobuf.Empty) returns (RecalculateAllResponse);
+}
+
+// ---------- SERVICE: PAYMENT (Internal Background Service) ----------
+service PaymentService {
+  // INTERNAL ONLY - No HTTP endpoints
+  // Used for background bank disbursement calculations
+  
+  rpc ListPayments (ListPaymentsRequest) returns (ListPaymentsResponse);
+  rpc ListPaymentsDataTable (ListPaymentsDataTableRequest) returns (ListPaymentsDataTableResponse);
+  rpc GetPaymentGroup (GetPaymentGroupRequest) returns (PaymentGroupResponse);
+  rpc CreatePaymentRequests (CreatePaymentRequestsRequest) returns (PaymentGroupResponse);
+  rpc UpdatePaymentGroup (UpdatePaymentGroupRequest) returns (PaymentGroupResponse);
+  rpc DeletePayment (DeletePaymentRequest) returns (google.protobuf.Empty);
+  rpc DeletePaymentItem (DeletePaymentItemRequest) returns (google.protobuf.Empty);
+  rpc SearchVendors (SearchVendorsRequest) returns (SearchVendorsResponse);
+  rpc SearchInternalVendors (SearchInternalVendorsRequest) returns (SearchVendorsResponse);
+  rpc SearchProjects (SearchProjectsRequest) returns (SearchProjectsResponse);
+  rpc GetFromAccountOptions (GetFromAccountOptionsRequest) returns (GetFromAccountOptionsResponse);
+  rpc GetAllVendors (google.protobuf.Empty) returns (SearchVendorsResponse);
+  rpc AddRequestToQueue (AddRequestToQueueRequest) returns (CartSnapshotResponse);
+  rpc RemoveRequestFromQueue (RemoveRequestFromQueueRequest) returns (CartSnapshotResponse);
+  rpc GetQueueSnapshot (QueueSnapshotRequest) returns (CartSnapshotResponse);
+  rpc CreatePaymentShortcut (CreatePaymentShortcutRequest) returns (PaymentShortcutResponse);
+  rpc ExecutePaymentShortcut (ExecutePaymentShortcutRequest) returns (PaymentGroupResponse);
+  rpc CreateBankLetterFromNotes (CreateBankLetterFromNotesRequest) returns (CreateBankLetterFromNotesResponse);
+  rpc ProcessBankLetterLog (ProcessBankLetterLogRequest) returns (ProcessBankLetterLogResponse);
+  rpc GeneratePaymentSerialNumber (google.protobuf.Empty) returns (GeneratePaymentSerialNumberResponse);
+  rpc TestPaymentAPI (google.protobuf.Empty) returns (TestPaymentAPIResponse);
+}
+
+// ---------- PO TRACKING MESSAGES ----------
+
+message GetOrCreatePOTrackingRequest {
+  string order_no = 1;
+  string vendor_id = 2;
+  string supplier_id = 3;
+  string order_date = 4;
+  double total_amount = 5;
+  string brief_of_goods_services = 6;
+}
+
+message GetPORequest {
+  string order_no = 1;
+}
+
+message CalculateExpendituresRequest {
+  string order_no = 1;
+  double invoice_value = 2;
+}
+
+message UpdatePOUtilizationRequest {
+  int64 po_tracking_id = 1;
+  int64 green_note_id = 2;
+}
+
+message ValidatePOBudgetRequest {
+  string order_no = 1;
+  double invoice_value = 2;
+  int64 exclude_green_note_id = 3;
+}
+
+message POTrackingResponse {
+  POTracking po_tracking = 1;
+}
+
+message CalculateExpendituresResponse {
+  string actual_expenditure = 1;
+  string budget_expenditure = 2;
+  string expenditure_over_budget = 3;
+  string remaining_budget = 4;
+  double utilization_percentage = 5;
+}
+
+message ValidatePOBudgetResponse {
+  bool valid = 1;
+  string message = 2;
+  POTracking po_tracking = 3;
+  double current_utilization = 4;
+  double remaining_budget = 5;
+}
+
+message GetPOSummaryResponse {
+  bool exists = 1;
+  string message = 2;
+  string order_no = 3;
+  double order_value = 4;
+  double total_utilized = 5;
+  double remaining_budget = 6;
+  double utilization_percentage = 7;
+  int32 green_notes_count = 8;
+  string status = 9;
+  string vendor = 10;
+  string supplier = 11;
+}
+
+message RecalculateAllResponse {
+  int32 records_updated = 1;
+}
+
+message POTracking {
+  int64 id = 1;
+  string order_no = 2;
+  string vendor_id = 3;
+  string supplier_id = 4;
+  string order_date = 5;
+  double order_value = 6;
+  double total_utilized = 7;
+  double remaining_budget = 8;
+  int32 green_notes_count = 9;
+  string description = 10;
+  string status = 11;
+  double utilization_percentage = 12;
+  VendorInfo vendor = 13;
+  SupplierInfo supplier = 14;
+  repeated GreenNoteInfo green_notes = 15;
+}
+
+message VendorInfo {
+  string id = 1;
+  string vendor_name = 2;
+  string project = 3;
+}
+
+message SupplierInfo {
+  string id = 1;
+  string supplier_name = 2;
+  string vendor_name = 3;
+}
+
+message GreenNoteInfo {
+  int64 id = 1;
+  string note_no = 2;
+  double invoice_value = 3;
+  string status = 4;
+  string created_at = 5;
+}
+
+// ---------- PAYMENT MESSAGES ----------
+
+message ListPaymentsRequest {
+  string status = 1;
+  bool include_all = 2;
+  string auth_user_id = 3;
+  repeated string user_roles = 4;
+  bool only_assigned = 5;
+  bool drafts_only = 6;
+  bool admin_view = 7;
+  string search = 8;
+  string sort_by = 9;
+  string sort_direction = 10;
+  int32 page = 11;
+  int32 per_page = 12;
+}
+
+message ListPaymentsDataTableRequest {
+  int32 draw = 1;
+  int32 start = 2;
+  int32 length = 3;
+  string order_column = 4;
+  string order_direction = 5;
+  string search_value = 6;
+  string status = 7;
+  string auth_user_id = 8;
+  repeated string user_roles = 9;
+}
+
+message GetPaymentGroupRequest {
+  string sl_no = 1;
+}
+
+message CreatePaymentRequestsRequest {
+  repeated PaymentRequestItem vendors = 1;
+  bool create_shortcut = 2;
+  string shortcut_name = 3;
+  repeated int64 payment_note_ids = 4;
+  string created_by = 5;
+}
+
+message UpdatePaymentGroupRequest {
+  string sl_no = 1;
+  string status = 2;
+  string type = 3;
+  repeated PaymentUpdateItem vendors = 4;
+  bool status_only = 5;
+  string auth_user_id = 6;
+}
+
+message DeletePaymentRequest {
+  int64 id = 1;
+  string sl_no = 2;
+}
+
+message DeletePaymentItemRequest {
+  string sl_no = 1;
+  int64 id = 2;
+}
+
+message SearchVendorsRequest {
+  int32 s_no = 1;
+  string project = 2;
+  string template_type = 3;
+  string search = 4;
+}
+
+message SearchInternalVendorsRequest {
+  string search = 1;
+}
+
+message SearchProjectsRequest {
+  string search = 1;
+}
+
+message GetFromAccountOptionsRequest {
+  string template_type = 1;
+}
+
+message AddRequestToQueueRequest {
+  PaymentRequestItem item = 1;
+  bool clear_existing = 2;
+  string user_id = 3;
+}
+
+message RemoveRequestFromQueueRequest {
+  string index = 1;
+  bool clear_cart = 2;
+  string user_id = 3;
+}
+
+message QueueSnapshotRequest {
+  string user_id = 1;
+}
+
+message CreatePaymentShortcutRequest {
+  string sl_no = 1;
+  string shortcut_name = 2;
+  repeated PaymentRequestItem request_items = 3;
+}
+
+message ExecutePaymentShortcutRequest {
+  int64 shortcut_id = 1;
+  string actor_id = 2;
+}
+
+message CreateBankLetterFromNotesRequest {
+  repeated int64 payment_note_ids = 1;
+  string actor_id = 2;
+}
+
+message CreateBankLetterFromNotesResponse {
+  string sl_no = 1;
+  int32 payments_count = 2;
+  double total_amount = 3;
+}
+
+message ProcessBankLetterLogRequest {
+  string sl_no = 1;
+  string status = 2;
+  string remarks = 3;
+  string reviewer_id = 4;
+}
+
+message ProcessBankLetterLogResponse {
+  string message = 1;
+  BankLetterApprovalLog log = 2;
+}
+
+message GeneratePaymentSerialNumberResponse {
+  string sl_no = 1;
+}
+
+message PaymentRequestItem {
+  string template_type = 1;
+  string project = 2;
+  string account_full_name = 3;
+  string from_account_type = 4;
+  string from_account_number = 5;
+  string to_account_type = 6;
+  string beneficiary_name = 7;
+  string beneficiary_account_number = 8;
+  string beneficiary_bank_name = 9;
+  string ifsc_code = 10;
+  double amount = 11;
+  string purpose = 12;
+  int64 payment_note_id = 13;
+}
+
+message PaymentUpdateItem {
+  int64 id = 1;
+  string template_type = 2;
+  string project = 3;
+  string account_full_name = 4;
+  string from_account_type = 5;
+  string from_account_number = 6;
+  string to_account_type = 7;
+  string beneficiary_name = 8;
+  string beneficiary_account_number = 9;
+  string beneficiary_bank_name = 10;
+  string ifsc_code = 11;
+  double amount = 12;
+  string purpose = 13;
+  string status = 14;
+}
+
+message PaymentShortcut {
+  int64 id = 1;
+  string sl_no = 2;
+  string shortcut_name = 3;
+  string request_data_json = 4;
+  string user_id = 5;
+  string created_at = 6;
+  string updated_at = 7;
+}
+
+message PaymentShortcutResponse {
+  PaymentShortcut shortcut = 1;
+}
+
+message PaymentGroup {
+  string sl_no = 1;
+  string status = 2;
+  string template_type = 3;
+  double net_payable_round_off = 4;
+  string created_at = 5;
+  string updated_at = 6;
+  common.RelatedUser owner = 7;
+  common.PaymentNoteReference payment_note = 8;
+  repeated Payment payments = 9;
+  PaymentShortcut shortcut = 10;
+}
+
+message Payment {
+  int64 id = 1;
+  string sl_no = 2;
+  string template_type = 3;
+  string project = 4;
+  string account_full_name = 5;
+  string from_account_type = 6;
+  string full_account_number = 7;
+  string to = 8;
+  string to_account_type = 9;
+  string name_of_beneficiary = 10;
+  string account_number = 11;
+  string name_of_bank = 12;
+  string ifsc_code = 13;
+  double amount = 14;
+  string purpose = 15;
+  string status = 16;
+  string user_id = 17;
+  int64 payment_note_id = 18;
+  string created_at = 19;
+  string updated_at = 20;
+  common.PaymentNoteReference payment_note = 21;
+}
+
+message BankLetterApprovalLog {
+  int64 id = 1;
+  string sl_no = 2;
+  string status = 3;
+  string comments = 4;
+  string reviewer_id = 5;
+  string created_at = 6;
+  repeated common.PaymentApprovalPriority priorities = 7;
+}
+
+message AccountOption {
+  string name = 1;
+  string account_number = 2;
+}
+
+message CartSnapshotResponse {
+  repeated PaymentRequestItem items = 1;
+}
+
+message ListPaymentsResponse {
+  repeated PaymentGroup groups = 1;
+  common.Pagination pagination = 2;
+}
+
+message ListPaymentsDataTableResponse {
+  int32 draw = 1;
+  int64 total_records = 2;
+  int64 total_display_records = 3;
+  repeated Payment payments = 4;
+}
+
+message PaymentGroupResponse {
+  PaymentGroup group = 1;
+}
+
+message SearchVendorsResponse {
+  repeated PaymentVendorInfo vendors = 1;
+}
+
+message PaymentVendorInfo {
+  int64 id = 1;
+  string project = 2;
+  int32 s_no = 3;
+  string short_name = 4;
+  string account_name = 5;
+  string vendor_code = 6;
+  string vendor_name = 7;
+  string vendor_type = 8;
+  string account_number = 9;
+  string vendor_nick_name = 10;
+  string beneficiary_name = 11;
+  string from_account_type = 12;
+  string name_of_bank = 13;
+  string ifsc_code = 14;
+}
+
+message SearchProjectsResponse {
+  repeated string projects = 1;
+}
+
+message GetFromAccountOptionsResponse {
+  repeated AccountOption accounts = 1;
+}
+
+message TestPaymentAPIResponse {
+  string status = 1;
+  string message = 2;
+  int64 timestamp = 3;
+}

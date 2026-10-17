@@ -1,0 +1,116 @@
+name: API Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  schedule:
+    # Run tests daily at 2 AM
+    - cron: '0 2 * * *'
+
+jobs:
+  pytest:
+    name: Python pytest Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+      
+      - name: Install dependencies
+        run: |
+          cd python-pytest
+          pip install -r requirements.txt
+      
+      - name: Run smoke tests
+        env:
+          API_BASE_URL: ${{ secrets.API_BASE_URL || 'http://localhost:8080' }}
+          TEST_TENANT_ID: ${{ secrets.TEST_TENANT_ID }}
+        run: |
+          cd python-pytest
+          pytest -m smoke -v --junitxml=reports/junit-smoke.xml
+      
+      - name: Run all tests
+        env:
+          API_BASE_URL: ${{ secrets.API_BASE_URL || 'http://localhost:8080' }}
+          TEST_TENANT_ID: ${{ secrets.TEST_TENANT_ID }}
+        run: |
+          cd python-pytest
+          pytest -v --junitxml=reports/junit.xml --html=reports/report.html --self-contained-html
+      
+      - name: Upload test results
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: test-results
+          path: python-pytest/reports/
+      
+      - name: Publish test results
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        if: always()
+        with:
+          files: python-pytest/reports/junit.xml
+      
+      - name: Comment PR with results
+        uses: daun/pytest-report-action@v1
+        if: github.event_name == 'pull_request'
+        with:
+          report-path: python-pytest/reports/junit.xml
+
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: pytest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          cd python-pytest
+          pip install -r requirements.txt
+      
+      - name: Run integration tests
+        env:
+          API_BASE_URL: ${{ secrets.API_BASE_URL }}
+          TEST_TENANT_ID: ${{ secrets.TEST_TENANT_ID }}
+        run: |
+          cd python-pytest
+          pytest -m integration -v --junitxml=reports/junit-integration.xml
+      
+      - name: Upload integration test results
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: integration-test-results
+          path: python-pytest/reports/
+
+  notify:
+    name: Notify Results
+    runs-on: ubuntu-latest
+    needs: [pytest, integration-tests]
+    if: always()
+    
+    steps:
+      - name: Send notification
+        run: echo "Tests completed. Check artifacts for results."

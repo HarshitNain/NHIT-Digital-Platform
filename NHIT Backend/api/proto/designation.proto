@@ -1,0 +1,113 @@
+syntax = "proto3";
+
+package designations;
+
+option go_package = "github.com/ShristiRnr/NHIT_Backend/api/pb/designationpb;designationpb";
+
+import "google/protobuf/timestamp.proto";
+import "google/api/annotations.proto";
+
+// Designation entity
+message Designation {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  google.protobuf.Timestamp created_at = 4;
+  google.protobuf.Timestamp updated_at = 5;
+}
+
+// ========== Request/Response Messages ==========
+
+// Create Designation
+message CreateDesignationRequest {
+  string name = 1;
+  string description = 2;
+}
+
+message DesignationResponse {
+  Designation designation = 1;
+  string message = 2;
+}
+
+// Get Designation
+message GetDesignationRequest {
+  string id = 1;
+}
+
+// Update Designation
+message UpdateDesignationRequest {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+}
+
+// Pagination metadata
+message PaginationMetadata {
+  int32 current_page = 1;
+  int32 page_size = 2;
+  int64 total_items = 3;
+  int32 total_pages = 4;
+}
+
+// Delete Designation
+message DeleteDesignationRequest {
+  string id = 1;
+}
+
+message DeleteDesignationResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// List Designations
+message ListDesignationsRequest {
+  int32 page = 1;
+  int32 page_size = 2;
+}
+
+message ListDesignationsResponse {
+  repeated Designation designations = 1;
+  PaginationMetadata pagination = 2;
+}
+
+// ========== Service ==========
+
+service DesignationService {
+  // Create a new designation
+  
+  rpc CreateDesignation(CreateDesignationRequest) returns (DesignationResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/designations"
+      body: "*"
+    };
+  }
+  
+  // Get designation by ID
+  rpc GetDesignation(GetDesignationRequest) returns (DesignationResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/designations/{id}"
+    };
+  }
+  
+  // Update designation
+  rpc UpdateDesignation(UpdateDesignationRequest) returns (DesignationResponse) {
+    option (google.api.http) = {
+      put: "/api/v1/designations/{id}"
+      body: "*"
+    };
+  }
+  
+  // Delete designation
+  rpc DeleteDesignation(DeleteDesignationRequest) returns (DeleteDesignationResponse) {
+    option (google.api.http) = {
+      delete: "/api/v1/designations/{id}"
+    };
+  }
+  
+  // List designations with pagination and filters
+  rpc ListDesignations(ListDesignationsRequest) returns (ListDesignationsResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/designations"
+    };
+  }
+}
