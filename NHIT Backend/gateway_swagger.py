@@ -41,6 +41,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
+from otp_notifier import dispatch_otp
+
 # ═══════════════════════════════════════════════════════
 # DATABASE CONNECTION
 # ═══════════════════════════════════════════════════════
@@ -859,14 +861,23 @@ async def login(body: LoginRequest):
                 "attempts": 0,
             }
 
-            print(f"[2FA SECURITY] OTP for {u['email']} is: {otp} (Expires in 5 minutes)")
+            # Multi-Channel OTP Dispatcher (Resend / Brevo / Gmail SMTP / Twilio / Console Sandbox)
+            dispatch_res = dispatch_otp(
+                recipient=u["email"],
+                otp_code=otp,
+                user_name=u.get("name", "Officer"),
+                action="NHIT Enterprise Portal Sign-In",
+                phone=u.get("phone")
+            )
+            delivery_channel = ", ".join(dispatch_res["channels"]) if dispatch_res["channels"] else "Sandbox Console"
 
             return {
                 "status": "2FA_REQUIRED",
                 "session_temp_token": temp_token,
-                "message": f"6-digit Two-Factor security code generated and sent to {u['email']}",
+                "message": f"6-digit Two-Factor security code generated and sent to {u['email']} via {delivery_channel}",
                 "email": u["email"],
                 "expires_in": 300,
+                "delivery_channel": delivery_channel,
                 "dev_otp_preview": otp,
             }
 
@@ -940,14 +951,23 @@ async def request_login_otp(body: LoginOTPRequest):
         "attempts": 0,
     }
 
-    print(f"[2FA DIRECT OTP] OTP for {u['email']} is: {otp}")
+    # Multi-Channel OTP Dispatcher
+    dispatch_res = dispatch_otp(
+        recipient=u["email"],
+        otp_code=otp,
+        user_name=u.get("name", "Officer"),
+        action="Passwordless Direct Sign-In",
+        phone=u.get("phone")
+    )
+    delivery_channel = ", ".join(dispatch_res["channels"]) if dispatch_res["channels"] else "Sandbox Console"
 
     return {
         "status": "2FA_REQUIRED",
         "session_temp_token": temp_token,
-        "message": f"6-digit login OTP sent to {u['email']}",
+        "message": f"A 6-digit one-time passcode has been sent to {u['email']} via {delivery_channel}.",
         "email": u["email"],
         "expires_in": 300,
+        "delivery_channel": delivery_channel,
         "dev_otp_preview": otp,
     }
 
@@ -1994,14 +2014,47 @@ async def upload_vendor_document(vendor_id: str):
 
 @app.post("/api/v1/notifications", tags=["🔔 Notification Service"], summary="Send Notification",
           description="""
-Sends a notification via the template engine. Supports email, SMS, and push notifications.
-
-**Template Variables:** Pass dynamic data in the `data` field to populate template placeholders.
-
-**Common Templates:** `welcome_email`, `password_reset`, `approval_notification`, `payment_processed`
+Sends a notification via the multi-channel template engine. Supports email, SMS, and push notifications.
 """)
 async def send_notification(body: SendNotificationRequest):
-    return {"success": True, "message": f"Notification sent to {body.to} using template '{body.template_name}'"}
+    data_dict = body.data or {}
+    otp_code = str(data_dict.get("otp", "849201"))
+    user_name = str(data_dict.get("name", "Officer"))
+    res = dispatch_otp(
+        recipient=body.to,
+        otp_code=otp_code,
+        user_name=user_name,
+        action=data_dict.get("action", f"Notification: {body.template_name}"),
+        phone=data_dict.get("phone")
+    )
+    return {
+        "success": True,
+        "message": f"Notification dispatched to {body.to}",
+        "delivery": res
+    }
+
+
+class TestLiveOTPRequest(BaseModel):
+    email: str = Field(..., description="Target email address")
+    phone: Optional[str] = Field(None, description="Optional target mobile phone (+91...)")
+    name: Optional[str] = Field("NHIT Officer", description="Recipient name")
+
+@app.post("/api/v1/notifications/test-otp", tags=["🔔 Notification Service"], summary="Live Dispatch Test OTP",
+          description="Directly triggers the multi-channel OTP dispatcher to send an actual email or SMS.")
+async def test_live_otp_dispatch(body: TestLiveOTPRequest):
+    code = generate_numeric_otp(6)
+    res = dispatch_otp(
+        recipient=body.email,
+        otp_code=code,
+        user_name=body.name or "NHIT Officer",
+        action="Live Notification System Test",
+        phone=body.phone
+    )
+    return {
+        "success": True,
+        "otp_generated": code,
+        "dispatch_result": res
+    }
 
 
 # ═══════════════════════════════════════════════════════
