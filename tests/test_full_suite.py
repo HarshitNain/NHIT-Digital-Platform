@@ -4,7 +4,7 @@ import json
 import sys
 import os
 
-BASE = os.environ.get("API_BASE_URL", "http://localhost:8080/api/v1")
+BASE = os.environ.get("API_BASE_URL", "http://127.0.0.1:8080/api/v1")
 
 def post(url, data):
     req = urllib.request.Request(
