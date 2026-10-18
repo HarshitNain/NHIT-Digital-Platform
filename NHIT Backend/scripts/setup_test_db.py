@@ -36,6 +36,16 @@ def run_migrations():
     conn.autocommit = True
     cur = conn.cursor()
 
+    consolidated_sql = os.path.join(BASE_DIR, "scripts", "consolidated-migrations.sql")
+    if os.path.exists(consolidated_sql):
+        print(f"Applying consolidated migrations from {consolidated_sql}...")
+        with open(consolidated_sql, "r", encoding="utf-8") as f:
+            try:
+                cur.execute(f.read())
+                print("Consolidated migrations applied successfully!")
+            except Exception as e:
+                print(f"[INFO] Notice on consolidated migrations: {str(e).strip()[:100]}")
+
     for mdir in MIGRATION_DIRS:
         if not os.path.exists(mdir):
             print(f"[SKIP] Directory not found: {mdir}")
