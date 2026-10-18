@@ -301,6 +301,13 @@ def dispatch_otp(
         "details": []
     }
 
+    if os.environ.get("ENVIRONMENT") == "test" or os.environ.get("MOCK_OTP_DISPATCH") == "true":
+        result["email_delivered"] = True
+        result["channels"].append("TestSandbox")
+        result["details"].append("Instant test sandbox dispatch")
+        print(f" [TEST SANDBOX] Recipient: {recipient} | OTP: >>> {otp_code} <<<")
+        return result
+
     load_env()
     resend_key = os.environ.get("RESEND_API_KEY", RESEND_API_KEY).strip()
     brevo_key = os.environ.get("BREVO_API_KEY", BREVO_API_KEY).strip()
