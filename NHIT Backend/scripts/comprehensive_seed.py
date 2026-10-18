@@ -22,17 +22,18 @@ import sys
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
 
+import os
 import psycopg2
 import psycopg2.extras
 import datetime
 import uuid
 
 DB_CONFIG = {
-    "host": "localhost",
-    "port": 5433,
-    "dbname": "nhit_db",
-    "user": "postgres",
-    "password": "shristi",
+    "host": os.environ.get("DB_HOST", "localhost"),
+    "port": int(os.environ.get("DB_PORT", 5433)),
+    "dbname": os.environ.get("DB_NAME", "nhit_db"),
+    "user": os.environ.get("DB_USER", "postgres"),
+    "password": os.environ.get("DB_PASSWORD", "shristi"),
 }
 
 def seed():

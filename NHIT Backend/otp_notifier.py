@@ -35,10 +35,11 @@ def load_env():
                         k, v = line.split("=", 1)
                         k = k.strip()
                         v = v.strip().strip('"').strip("'")
-                        if k and k not in os.environ:
+                        if k and (k not in os.environ or not os.environ[k]):
                             os.environ[k] = v
 
 load_env()
+
 
 # Configuration variables
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "").strip()
@@ -122,17 +123,19 @@ def build_otp_html_email(user_name: str, otp_code: str, action: str = "Two-Facto
 # ═══════════════════════════════════════════════════════════════════════════════
 def send_email_via_resend(to_email: str, subject: str, html_content: str) -> Tuple[bool, str]:
     """Send transactional email via Resend REST API."""
-    if not RESEND_API_KEY:
+    resend_key = os.environ.get("RESEND_API_KEY", RESEND_API_KEY).strip()
+    sender = os.environ.get("EMAIL_SENDER", EMAIL_SENDER).strip() or "NHIT Security <onboarding@resend.dev>"
+    if not resend_key:
         return False, "RESEND_API_KEY not configured"
 
     url = "https://api.resend.com/emails"
     headers = {
-        "Authorization": f"Bearer {RESEND_API_KEY}",
+        "Authorization": f"Bearer {resend_key}",
         "Content-Type": "application/json",
         "User-Agent": "NHIT-NotificationService/1.0"
     }
     payload = {
-        "from": EMAIL_SENDER,
+        "from": sender,
         "to": [to_email],
         "subject": subject,
         "html": html_content
@@ -149,17 +152,24 @@ def send_email_via_resend(to_email: str, subject: str, html_content: str) -> Tup
     except Exception as e:
         return False, f"Resend exception: {str(e)}"
 
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # 2. GMAIL / CUSTOM SMTP DISPATCHER (Free: 500 emails/day via Gmail App Password)
 # ═══════════════════════════════════════════════════════════════════════════════
 def send_email_via_smtp(to_email: str, subject: str, html_content: str) -> Tuple[bool, str]:
     """Send transactional email via standard SSL/TLS SMTP."""
-    if not (SMTP_USER and SMTP_PASSWORD):
+    smtp_user = os.environ.get("SMTP_USER", SMTP_USER).strip()
+    smtp_pass = os.environ.get("SMTP_PASSWORD", SMTP_PASSWORD).strip()
+    smtp_host = os.environ.get("SMTP_HOST", SMTP_HOST).strip() or "smtp.gmail.com"
+    smtp_port = int(os.environ.get("SMTP_PORT", str(SMTP_PORT)).strip() or 465)
+    from_name = os.environ.get("SMTP_FROM_NAME", SMTP_FROM_NAME).strip() or "NHIT Digital Platform Security"
+
+    if not (smtp_user and smtp_pass):
         return False, "SMTP_USER or SMTP_PASSWORD not configured"
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
-    msg["From"] = f"{SMTP_FROM_NAME} <{SMTP_USER}>"
+    msg["From"] = f"{from_name} <{smtp_user}>"
     msg["To"] = to_email
 
     # Plaintext fallback
@@ -168,20 +178,21 @@ def send_email_via_smtp(to_email: str, subject: str, html_content: str) -> Tuple
     msg.attach(MIMEText(html_content, "html"))
 
     try:
-        if SMTP_PORT == 465:
+        if smtp_port == 465:
             context = ssl.create_default_context()
-            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=context, timeout=10) as server:
-                server.login(SMTP_USER, SMTP_PASSWORD)
-                server.sendmail(SMTP_USER, to_email, msg.as_string())
+            with smtplib.SMTP_SSL(smtp_host, smtp_port, context=context, timeout=12) as server:
+                server.login(smtp_user, smtp_pass)
+                server.sendmail(smtp_user, to_email, msg.as_string())
         else:
-            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as server:
+            with smtplib.SMTP(smtp_host, smtp_port, timeout=12) as server:
                 server.starttls(context=ssl.create_default_context())
-                server.login(SMTP_USER, SMTP_PASSWORD)
-                server.sendmail(SMTP_USER, to_email, msg.as_string())
+                server.login(smtp_user, smtp_pass)
+                server.sendmail(smtp_user, to_email, msg.as_string())
 
-        return True, f"Sent via SMTP ({SMTP_HOST}:{SMTP_PORT})"
+        return True, f"Sent via SMTP ({smtp_host}:{smtp_port})"
     except Exception as e:
         return False, f"SMTP error: {str(e)}"
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 3. BREVO (SENDINBLUE) DISPATCHER (Free: 300 emails/day, 9,000/month)
@@ -290,36 +301,43 @@ def dispatch_otp(
         "details": []
     }
 
+    load_env()
+    resend_key = os.environ.get("RESEND_API_KEY", RESEND_API_KEY).strip()
+    brevo_key = os.environ.get("BREVO_API_KEY", BREVO_API_KEY).strip()
+    smtp_u = os.environ.get("SMTP_USER", SMTP_USER).strip()
+    smtp_p = os.environ.get("SMTP_PASSWORD", SMTP_PASSWORD).strip()
+
     # 1. Build Email Content
     subject = f"NHIT Security Code: {otp_code} (Valid for 5 minutes)"
     html_content = build_otp_html_email(user_name=user_name, otp_code=otp_code, action=action)
 
-    # 2. Try Email Dispatchers in Priority Order
+    # 2. Try Email Dispatchers in Priority Order:
+    # Solution 1: Gmail SMTP (No recipient/domain restrictions - sends to ANY email)
     email_sent = False
 
-    # A. Resend
-    if RESEND_API_KEY:
+    # A. Standard SMTP (Gmail - Solution 1)
+    if smtp_u and smtp_p:
+        ok, msg = send_email_via_smtp(recipient, subject, html_content)
+        result["details"].append(f"[SMTP] {msg}")
+        if ok:
+            email_sent = True
+            result["channels"].append(f"Email:SMTP({os.environ.get('SMTP_HOST', 'smtp.gmail.com')})")
+
+    # B. Resend (Fallback or Primary if SMTP not configured)
+    if not email_sent and resend_key:
         ok, msg = send_email_via_resend(recipient, subject, html_content)
         result["details"].append(f"[Resend] {msg}")
         if ok:
             email_sent = True
             result["channels"].append("Email:Resend")
 
-    # B. Brevo
-    if not email_sent and BREVO_API_KEY:
+    # C. Brevo (Fallback)
+    if not email_sent and brevo_key:
         ok, msg = send_email_via_brevo(recipient, subject, html_content)
         result["details"].append(f"[Brevo] {msg}")
         if ok:
             email_sent = True
             result["channels"].append("Email:Brevo")
-
-    # C. Standard SMTP (Gmail)
-    if not email_sent and SMTP_USER and SMTP_PASSWORD:
-        ok, msg = send_email_via_smtp(recipient, subject, html_content)
-        result["details"].append(f"[SMTP] {msg}")
-        if ok:
-            email_sent = True
-            result["channels"].append(f"Email:SMTP({SMTP_HOST})")
 
     result["email_delivered"] = email_sent
 
@@ -365,7 +383,7 @@ def dispatch_otp(
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Test NHIT OTP & Notification Engine")
-    parser.add_argument("--to", default="admin@nhit.com", help="Recipient email address")
+    parser.add_argument("--to", default="predictor020@gmail.com", help="Recipient email address")
     parser.add_argument("--phone", default=None, help="Recipient phone number (e.g. +919876543210)")
     parser.add_argument("--code", default="739201", help="6-digit test code")
     args = parser.parse_args()

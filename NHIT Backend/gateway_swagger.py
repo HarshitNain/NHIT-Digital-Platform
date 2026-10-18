@@ -47,11 +47,11 @@ from otp_notifier import dispatch_otp
 # DATABASE CONNECTION
 # ═══════════════════════════════════════════════════════
 DB_CONFIG = {
-    "host": "localhost",
-    "port": 5433,
-    "dbname": "nhit_db",
-    "user": "postgres",
-    "password": "shristi",
+    "host": os.environ.get("DB_HOST", "localhost"),
+    "port": int(os.environ.get("DB_PORT", 5433)),
+    "dbname": os.environ.get("DB_NAME", "nhit_db"),
+    "user": os.environ.get("DB_USER", "postgres"),
+    "password": os.environ.get("DB_PASSWORD", "shristi"),
 }
 
 def get_db():
@@ -399,6 +399,17 @@ app.add_middleware(
 @app.get("/docs", include_in_schema=False)
 def docs_redirect():
     return RedirectResponse(url="/swagger")
+
+
+@app.get("/api/v1/health", tags=["🏥 System Health"], summary="Gateway Healthcheck")
+@app.get("/health", tags=["🏥 System Health"], summary="Root Healthcheck")
+def healthcheck():
+    return {
+        "status": "UP",
+        "service": "NHIT Enterprise API Gateway",
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "version": "2.0.0"
+    }
 
 
 
