@@ -806,7 +806,8 @@ async def health():
     except Exception:
         db_ok = False
     return {
-        "status": "healthy" if db_ok else "degraded",
+        "status": "UP" if db_ok else "DEGRADED",
+        "healthy": db_ok,
         "database": "connected" if db_ok else "disconnected",
         "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "services": SERVICES,

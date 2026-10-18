@@ -139,12 +139,12 @@ jobs:
           ENVIRONMENT: test
           API_BASE_URL: http://localhost:8080/api/v1
         run: |
-          python "NHIT Backend/gateway_swagger.py" &
+          python "NHIT Backend/gateway_swagger.py" > gateway.log 2>&1 &
           GATEWAY_PID=$!
           echo "Waiting for Gateway to report healthy on port 8080 (PID: $GATEWAY_PID)..."
           READY=0
           for i in {1..30}; do
-            if curl -s http://localhost:8080/api/v1/health | grep -q "UP"; then
+            if curl -s http://localhost:8080/api/v1/health | grep -q -E "UP|healthy"; then
               echo "Gateway is UP and healthy!"
               READY=1
               break
@@ -152,7 +152,8 @@ jobs:
             sleep 1
           done
           if [ $READY -ne 1 ]; then
-            echo "Gateway failed to start within 30s"
+            echo "Gateway failed to start within 30s. Gateway logs:"
+            cat gateway.log
             exit 1
           fi
           echo "Executing Full Integration Test Suite (test_full_suite.py)..."
