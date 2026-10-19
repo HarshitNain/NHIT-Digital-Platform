@@ -30,6 +30,7 @@ import traceback
 import uuid
 import urllib.request
 import urllib.parse
+from enum import Enum
 from typing import Any, Dict, List, Optional
 
 import bcrypt
@@ -2332,19 +2333,34 @@ async def update_green_note(id: str, body: CreateGreenNoteRequest):
     return {"id": id, "success": True, "message": "Green note updated"}
 
 
+class GreenNoteStatus(str, Enum):
+    DRAFT = "DRAFT"
+    PENDING = "PENDING"
+    SUBMITTED = "SUBMITTED"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    CANCELLED = "CANCELLED"
+
 class UpdateNoteStatusRequest(BaseModel):
-    status: str = Field(..., description="APPROVED, REJECTED, PENDING, or DRAFT")
+    status: str = Field(..., description="Allowed statuses: DRAFT, PENDING, SUBMITTED, APPROVED, REJECTED, CANCELLED")
     remarks: Optional[str] = Field("", description="Review remarks")
 
 @app.patch("/api/v1/green-notes/{id}/status", tags=["📝 GreenNote Service"], summary="Update Green Note Status",
-           description="Updates approval status (APPROVED, REJECTED, PENDING) with reviewer remarks.")
+           description="Updates approval status with reviewer remarks. Enforces statutory status whitelist.")
 async def update_green_note_status(id: str, body: UpdateNoteStatusRequest):
+    new_status = str(body.status).strip().upper()
+    valid_statuses = {s.value for s in GreenNoteStatus}
+    if new_status not in valid_statuses:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid green note status '{body.status}'. Allowed statutory statuses are: {sorted(list(valid_statuses))}"
+        )
     match = next((n for n in GREEN_NOTES_STORE if n.get("id") == id), None)
     if not match:
         raise HTTPException(404, "Green Note not found")
-    match["status"] = body.status
+    match["status"] = new_status
     match["remarks"] = body.remarks
-    return {"id": id, "success": True, "status": body.status, "message": f"Green note status set to {body.status}"}
+    return {"id": id, "success": True, "status": new_status, "message": f"Green note status set to {new_status}"}
 
 
 
@@ -2496,18 +2512,36 @@ async def update_utr(id: int, body: UpdateUTRRequest):
     return {"note": match or {}}
 
 
+class PaymentNoteStatus(str, Enum):
+    DRAFT = "DRAFT"
+    PENDING = "PENDING"
+    ACTIVE = "ACTIVE"
+    HOLD = "HOLD"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    PAID = "PAID"
+
 class PaymentNoteStatusRequest(BaseModel):
-    status: str = Field(..., description="ACTIVE, HOLD, PAID, or DRAFT")
+    status: str = Field(..., description="Allowed statuses: DRAFT, PENDING, ACTIVE, HOLD, APPROVED, REJECTED, PAID")
     remarks: Optional[str] = Field("", description="Reason or remarks")
 
 @app.patch("/api/v1/payment-notes/{id}/status", tags=["💰 PaymentNote Service"], summary="Update Payment Note Status",
-           description="Updates status (e.g., toggling HOLD / ACTIVE).")
+           description="Updates status (e.g., toggling HOLD / ACTIVE). Validates statutory lifecycle whitelist.")
 async def update_payment_note_status(id: str, body: PaymentNoteStatusRequest):
+    new_status = str(body.status).strip().upper()
+    valid_statuses = {s.value for s in PaymentNoteStatus}
+    if new_status not in valid_statuses:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid payment note status '{body.status}'. Allowed statutory statuses are: {sorted(list(valid_statuses))}"
+        )
     match = next((n for n in PAYMENT_NOTES_STORE if str(n.get("id")) == str(id)), None)
     if not match:
         raise HTTPException(404, "Payment note not found")
-    match["status"] = body.status
-    return {"id": id, "success": True, "status": body.status, "message": f"Payment note status set to {body.status}"}
+    match["status"] = new_status
+    if body.remarks:
+        match["remarks"] = body.remarks
+    return {"id": id, "success": True, "status": new_status, "message": f"Payment note status set to {new_status}"}
 
 
 class PatchUTRRequest(BaseModel):
