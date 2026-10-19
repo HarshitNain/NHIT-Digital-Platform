@@ -416,6 +416,34 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ------------------------------------------------------------------------------
+# SECURITY ERROR SANITIZATION (OWASP API8:2023 / CWE-209 Mitigation)
+# Prevents internal database connection strings, table details, and topology leaks
+# ------------------------------------------------------------------------------
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+@app.exception_handler(StarletteHTTPException)
+async def custom_http_exception_handler(request, exc: StarletteHTTPException):
+    if exc.status_code == 500 and os.environ.get("ENVIRONMENT") not in ("test", "development"):
+        error_id = str(uuid.uuid4())[:8]
+        print(f"[INTERNAL ERROR {error_id}] {request.method} {request.url.path}: {exc.detail}", flush=True)
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"An internal database/server error occurred. (Error ID: {error_id})"}
+        )
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+@app.exception_handler(Exception)
+async def generic_exception_handler(request, exc: Exception):
+    error_id = str(uuid.uuid4())[:8]
+    print(f"[UNHANDLED EXCEPTION {error_id}] {request.method} {request.url.path}: {exc}", flush=True)
+    if os.environ.get("ENVIRONMENT") in ("test", "development"):
+        return JSONResponse(status_code=500, content={"detail": f"[{error_id}] {str(exc)}"})
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"An unexpected error occurred. (Error ID: {error_id})"}
+    )
+
 
 @app.get("/docs", include_in_schema=False)
 def docs_redirect():
