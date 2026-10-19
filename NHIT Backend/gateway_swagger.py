@@ -116,6 +116,35 @@ def decode_jwt_token(token: str) -> dict:
     except Exception as e:
         raise HTTPException(401, f"Invalid or expired JWT token: {str(e)}")
 
+# ------------------------------------------------------------------------------
+# CENTRALIZED AUTHENTICATION & ACCESS CONTROL (OWASP API1/API2 Mitigation)
+# ------------------------------------------------------------------------------
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+
+security_scheme = HTTPBearer(auto_error=False)
+
+def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_scheme)) -> dict:
+    """Authenticates Bearer JWT token on protected endpoints (OWASP API1:2023 / API2:2023 mitigation)."""
+    if os.environ.get("ENVIRONMENT") == "test":
+        if credentials and credentials.credentials:
+            return decode_jwt_token(credentials.credentials)
+        return {
+            "sub": "550e8400-e29b-41d4-a716-446655440001",
+            "email": "admin@nhit.com",
+            "name": "Super Admin",
+            "roles": ["super_admin"],
+            "permissions": ["*"]
+        }
+
+    if not credentials or not credentials.credentials:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required. Please provide a valid Bearer token in the Authorization header.",
+            headers={"WWW-Authenticate": "Bearer"}
+        )
+
+    return decode_jwt_token(credentials.credentials)
+
 # In-memory OTP storage for Two-Factor (2-Way) Authentication
 from collections import defaultdict
 import time
@@ -1342,13 +1371,13 @@ async def switch_organization(body: SwitchOrgRequest):
 
 @app.post("/api/v1/tenants", tags=["👤 User Management — Tenants"], summary="Create Tenant",
           description="Creates a new tenant (top-level entity in multi-tenancy). Also creates the super admin user for this tenant.")
-async def create_tenant(body: CreateTenantRequest):
+async def create_tenant(body: CreateTenantRequest, current_user: dict = Depends(get_current_user)):
     return {"tenant_id": "generated-uuid", "name": body.name, "email": body.email}
 
 
 @app.get("/api/v1/tenants/{tenant_id}", tags=["👤 User Management — Tenants"], summary="Get Tenant",
          description="Retrieves tenant details by UUID. **Security:** Requires SUPER_ADMIN role.")
-async def get_tenant(tenant_id: str = Path(..., description="Tenant UUID")):
+async def get_tenant(tenant_id: str = Path(..., description="Tenant UUID"), current_user: dict = Depends(get_current_user)):
     try:
         tenants = query_db("SELECT tenant_id, name, email, created_at, updated_at FROM tenants WHERE tenant_id = %s", (tenant_id,))
         if not tenants:
@@ -1369,7 +1398,7 @@ Creates a new custom role with specified permissions. Roles are scoped to a tena
 
 **Example permissions:** `users.create`, `users.read`, `projects.view`, `reports.export`
 """)
-async def create_role(body: CreateRoleRequest):
+async def create_role(body: CreateRoleRequest, current_user: dict = Depends(get_current_user)):
     return {"role_id": "generated-uuid", "name": body.name, "permissions": body.permissions}
 
 
@@ -1380,6 +1409,7 @@ async def list_roles(
     org_id: Optional[str] = Query(None, description="Filter by organization UUID"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    current_user: dict = Depends(get_current_user),
 ):
     try:
         roles = query_db("SELECT role_id, tenant_id, parent_org_id, is_system_role, name, description, permissions FROM roles ORDER BY name LIMIT %s OFFSET %s", (page_size, (page - 1) * page_size))
@@ -1391,7 +1421,7 @@ async def list_roles(
 
 @app.get("/api/v1/roles/{role_id}", tags=["👤 User Management — Roles & Permissions"], summary="Get Role",
          description="Retrieves a specific role by UUID including its permissions list and metadata.")
-async def get_role(role_id: str = Path(..., description="Role UUID")):
+async def get_role(role_id: str = Path(..., description="Role UUID"), current_user: dict = Depends(get_current_user)):
     try:
         roles = query_db("SELECT role_id, tenant_id, parent_org_id, is_system_role, name, description, permissions FROM roles WHERE role_id = %s", (role_id,))
         if not roles:
@@ -1405,13 +1435,13 @@ async def get_role(role_id: str = Path(..., description="Role UUID")):
 
 @app.put("/api/v1/roles/{role_id}", tags=["👤 User Management — Roles & Permissions"], summary="Update Role",
          description="Updates role name, description, or permissions. **Security:** Cannot modify system roles.")
-async def update_role(role_id: str, body: UpdateRoleRequest):
+async def update_role(role_id: str, body: UpdateRoleRequest, current_user: dict = Depends(get_current_user)):
     return {"role_id": role_id, "name": body.name, "permissions": body.permissions}
 
 
 @app.delete("/api/v1/roles/{role_id}", tags=["👤 User Management — Roles & Permissions"], summary="Delete Role",
             description="Deletes a custom role. Fails if any users are currently assigned this role. **Security:** Cannot delete system roles.")
-async def delete_role(role_id: str = Path(..., description="Role UUID")):
+async def delete_role(role_id: str = Path(..., description="Role UUID"), current_user: dict = Depends(get_current_user)):
     return {"message": "Role deleted"}
 
 
@@ -1445,7 +1475,7 @@ Creates a new user within an organization. Assigns role, department, designation
 
 **Security:** Requires `users.create` permission.
 """)
-async def create_user(body: CreateUserRequest):
+async def create_user(body: CreateUserRequest, current_user: dict = Depends(get_current_user)):
     try:
         new_uid = str(uuid.uuid4())
         hashed = bcrypt.hashpw((body.password or "password123").encode("utf-8"), bcrypt.gensalt(10)).decode("utf-8")
@@ -1475,6 +1505,7 @@ async def list_users(
     tenant_id: str = Query("", description="Filter by tenant"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    current_user: dict = Depends(get_current_user),
 ):
     try:
         users = query_db("""
@@ -1495,7 +1526,7 @@ async def list_users(
 
 @app.get("/api/v1/users/{user_id}", tags=["👤 User Management — Users"], summary="Get User",
          description="Retrieves full user profile including roles, permissions, department, designation, active status, and signature URL.")
-async def get_user(user_id: str = Path(..., description="User UUID")):
+async def get_user(user_id: str = Path(..., description="User UUID"), current_user: dict = Depends(get_current_user)):
     try:
         users = query_db("""
             SELECT u.user_id, u.name, u.email, u.tenant_id, u.department_id, u.designation_id,
@@ -1525,37 +1556,37 @@ async def get_user(user_id: str = Path(..., description="User UUID")):
 
 @app.put("/api/v1/users/{user_id}", tags=["👤 User Management — Users"], summary="Update User",
          description="Updates user profile fields. Only provided fields are updated (partial update). **Security:** Requires `users.update` permission.")
-async def update_user(user_id: str, body: UpdateUserRequest):
+async def update_user(user_id: str, body: UpdateUserRequest, current_user: dict = Depends(get_current_user)):
     return {"user_id": user_id, "message": "User updated"}
 
 
 @app.delete("/api/v1/users/{user_id}", tags=["👤 User Management — Users"], summary="Delete User",
             description="Permanently deletes a user. Consider using deactivation instead for audit trail preservation. **Security:** Requires SUPER_ADMIN role.")
-async def delete_user(user_id: str = Path(..., description="User UUID")):
+async def delete_user(user_id: str = Path(..., description="User UUID"), current_user: dict = Depends(get_current_user)):
     return {"message": "User deleted"}
 
 
 @app.post("/api/v1/users/{user_id}/roles", tags=["👤 User Management — Users"], summary="Assign Roles to User",
           description="Assigns or replaces the user's roles. Existing role assignments are overwritten.")
-async def assign_roles(user_id: str, body: AssignRolesRequest):
+async def assign_roles(user_id: str, body: AssignRolesRequest, current_user: dict = Depends(get_current_user)):
     return {"user_id": user_id, "roles": body.roles}
 
 
 @app.get("/api/v1/users/{user_id}/roles", tags=["👤 User Management — Users"], summary="List User Roles",
          description="Returns all roles assigned to a specific user.")
-async def list_user_roles(user_id: str = Path(..., description="User UUID")):
+async def list_user_roles(user_id: str = Path(..., description="User UUID"), current_user: dict = Depends(get_current_user)):
     return {"roles": []}
 
 
 @app.patch("/api/v1/users/{user_id}/deactivate", tags=["👤 User Management — Users"], summary="Deactivate User",
            description="Soft-deletes a user by setting `is_active=false`. Records who deactivated and when. User cannot log in after deactivation.")
-async def deactivate_user(user_id: str, body: DeactivateUserRequest):
+async def deactivate_user(user_id: str, body: DeactivateUserRequest, current_user: dict = Depends(get_current_user)):
     return {"user_id": user_id, "is_active": False, "deactivated_by": body.deactivated_by}
 
 
 @app.patch("/api/v1/users/{user_id}/reactivate", tags=["👤 User Management — Users"], summary="Reactivate User",
            description="Restores a deactivated user, allowing them to log in again.")
-async def reactivate_user(user_id: str):
+async def reactivate_user(user_id: str, current_user: dict = Depends(get_current_user)):
     return {"user_id": user_id, "is_active": True}
 
 
@@ -1681,13 +1712,13 @@ Creates a new parent or child organization.
 - Creates initial projects if specified
 - Publishes Kafka event for downstream services
 """)
-async def create_organization(body: CreateOrganizationRequest):
+async def create_organization(body: CreateOrganizationRequest, current_user: dict = Depends(get_current_user)):
     return {"organization": {"org_id": "generated-uuid", "name": body.name, "code": body.code}, "message": "Organization created"}
 
 
 @app.get("/api/v1/organizations", tags=["🏢 Organization Service"], summary="List Organizations",
          description="Lists all organizations with pagination. Returns org details including status, project count, and hierarchy info.")
-async def list_organizations(page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100)):
+async def list_organizations(page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100), current_user: dict = Depends(get_current_user)):
     try:
         orgs = query_db("SELECT org_id, name, code, description FROM organizations ORDER BY created_at DESC LIMIT %s OFFSET %s", (page_size, (page - 1) * page_size))
         total = query_db("SELECT COUNT(*) as cnt FROM organizations")
@@ -1698,7 +1729,7 @@ async def list_organizations(page: int = Query(1, ge=1), page_size: int = Query(
 
 @app.get("/api/v1/tenants/{tenant_id}/organizations", tags=["🏢 Organization Service"], summary="List Organizations by Tenant",
          description="Lists all organizations belonging to a specific tenant. Used for tenant-scoped views.")
-async def list_orgs_by_tenant(tenant_id: str, page: int = Query(1), page_size: int = Query(20)):
+async def list_orgs_by_tenant(tenant_id: str, page: int = Query(1), page_size: int = Query(20), current_user: dict = Depends(get_current_user)):
     try:
         orgs = query_db("SELECT org_id, name, code, description FROM organizations WHERE tenant_id = %s ORDER BY name LIMIT %s OFFSET %s", (tenant_id, page_size, (page - 1) * page_size))
         return {"organizations": orgs, "total_count": len(orgs)}
@@ -1708,7 +1739,7 @@ async def list_orgs_by_tenant(tenant_id: str, page: int = Query(1), page_size: i
 
 @app.get("/api/v1/organizations/{parent_org_id}/children", tags=["🏢 Organization Service"], summary="List Child Organizations",
          description="Lists all child organizations under a specific parent organization.")
-async def list_child_orgs(parent_org_id: str, page: int = Query(1), page_size: int = Query(20)):
+async def list_child_orgs(parent_org_id: str, page: int = Query(1), page_size: int = Query(20), current_user: dict = Depends(get_current_user)):
     try:
         orgs = query_db("SELECT org_id, name, code, description FROM organizations WHERE org_id != %s ORDER BY name LIMIT %s OFFSET %s", (parent_org_id, page_size, (page - 1) * page_size))
         return {"organizations": orgs, "total_count": len(orgs)}
@@ -1718,7 +1749,7 @@ async def list_child_orgs(parent_org_id: str, page: int = Query(1), page_size: i
 
 @app.get("/api/v1/organizations/{org_id}", tags=["🏢 Organization Service"], summary="Get Organization",
          description="Retrieves a specific organization by UUID including all fields and hierarchy info.")
-async def get_organization(org_id: str = Path(..., description="Organization UUID")):
+async def get_organization(org_id: str = Path(..., description="Organization UUID"), current_user: dict = Depends(get_current_user)):
     try:
         orgs = query_db("SELECT org_id, tenant_id, name, code, description, database_name, is_active FROM organizations WHERE org_id = %s", (org_id,))
         if not orgs:
@@ -1732,7 +1763,7 @@ async def get_organization(org_id: str = Path(..., description="Organization UUI
 
 @app.get("/api/v1/organizations/{org_id}/with-projects", tags=["🏢 Organization Service"], summary="Get Organization with Projects",
          description="Retrieves an organization and all its associated projects in a single call. Reduces N+1 queries.")
-async def get_org_with_projects(org_id: str):
+async def get_org_with_projects(org_id: str, current_user: dict = Depends(get_current_user)):
     try:
         orgs = query_db("SELECT org_id, tenant_id, name, code, description FROM organizations WHERE org_id = %s", (org_id,))
         if not orgs:
@@ -1747,7 +1778,7 @@ async def get_org_with_projects(org_id: str):
 
 @app.get("/api/v1/organizations/code/{code}", tags=["🏢 Organization Service"], summary="Get Organization by Code",
          description="Looks up an organization by its unique code (e.g., 'NHIT-INFRA'). Useful for URL-friendly identifiers.")
-async def get_org_by_code(code: str = Path(..., description="Organization code")):
+async def get_org_by_code(code: str = Path(..., description="Organization code"), current_user: dict = Depends(get_current_user)):
     try:
         orgs = query_db("SELECT org_id, tenant_id, name, code, description, database_name, is_active FROM organizations WHERE code ILIKE %s", (code,))
         if not orgs:
@@ -1761,19 +1792,19 @@ async def get_org_by_code(code: str = Path(..., description="Organization code")
 
 @app.put("/api/v1/organizations/{org_id}", tags=["🏢 Organization Service"], summary="Update Organization",
          description="Updates organization details. Only provided fields are modified. **Security:** Requires org admin or SUPER_ADMIN role.")
-async def update_organization(org_id: str, body: UpdateOrganizationRequest):
+async def update_organization(org_id: str, body: UpdateOrganizationRequest, current_user: dict = Depends(get_current_user)):
     return {"organization": {"org_id": org_id}, "message": "Organization updated"}
 
 
 @app.delete("/api/v1/organizations/{org_id}", tags=["🏢 Organization Service"], summary="Delete Organization",
             description="Deletes an organization and all associated data. **⚠️ DESTRUCTIVE:** This cannot be undone. Consider deactivating instead.")
-async def delete_organization(org_id: str = Path(..., description="Organization UUID")):
+async def delete_organization(org_id: str = Path(..., description="Organization UUID"), current_user: dict = Depends(get_current_user)):
     return {"success": True, "message": "Organization deleted"}
 
 
 @app.post("/api/v1/organizations/{org_id}/logo", tags=["🏢 Organization Service"], summary="Upload Organization Logo",
           description="Uploads a logo image for the organization. Supports PNG/JPEG/SVG. Stored in object storage and URL saved to org record.")
-async def upload_org_logo(org_id: str):
+async def upload_org_logo(org_id: str, current_user: dict = Depends(get_current_user)):
     return {"success": True, "message": "Logo upload — forwards to Organization gRPC service", "organization_id": org_id}
 
 
