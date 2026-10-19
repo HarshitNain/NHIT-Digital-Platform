@@ -80,7 +80,16 @@ def execute_db(sql, params=None):
 # ═══════════════════════════════════════════════════════
 # JWT & SECURITY CONFIGURATION
 # ═══════════════════════════════════════════════════════
-JWT_SECRET = os.environ.get("JWT_SECRET", "test-secret-key-for-development-only-change-in-production")
+DEV_FALLBACK_JWT_SECRET = "test-secret-key-for-development-only-change-in-production"
+_jwt_env_secret = os.environ.get("JWT_SECRET", "").strip()
+
+if not _jwt_env_secret:
+    if os.environ.get("ENVIRONMENT") in ("production", "prod"):
+        raise RuntimeError("FATAL SECURITY: JWT_SECRET environment variable must be configured in production.")
+    JWT_SECRET = DEV_FALLBACK_JWT_SECRET
+else:
+    JWT_SECRET = _jwt_env_secret
+
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_HOURS = 24
 
