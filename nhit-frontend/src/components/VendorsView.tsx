@@ -21,8 +21,8 @@ export const VendorsView: React.FC<VendorsViewProps> = ({
     if (!searchQuery) return true;
     const q = searchQuery.toLowerCase();
     return (
-      v.name.toLowerCase().includes(q) ||
-      v.vendor_code.toLowerCase().includes(q) ||
+      (v.name || '').toLowerCase().includes(q) ||
+      (v.vendor_code || '').toLowerCase().includes(q) ||
       (v.gstin || '').toLowerCase().includes(q) ||
       (v.pan || '').toLowerCase().includes(q)
     );

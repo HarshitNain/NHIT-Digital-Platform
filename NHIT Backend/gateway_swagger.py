@@ -78,6 +78,20 @@ def execute_db(sql, params=None):
     finally:
         conn.close()
 
+def validate_uuid(val: str, param_name: str = "ID") -> str:
+    """
+    Validates that a string is a well-formed 128-bit UUID to prevent
+    PostgreSQL invalid input syntax for type uuid (500 Internal Server Errors).
+    """
+    try:
+        uuid.UUID(str(val))
+        return str(val)
+    except (ValueError, TypeError, AttributeError):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid {param_name} format. Expected standard 36-character UUID string (e.g., 550e8400-e29b-41d4-a716-446655440000)."
+        )
+
 # ═══════════════════════════════════════════════════════
 # JWT & SECURITY CONFIGURATION
 # ═══════════════════════════════════════════════════════
@@ -1379,6 +1393,7 @@ async def create_tenant(body: CreateTenantRequest, current_user: dict = Depends(
 @app.get("/api/v1/tenants/{tenant_id}", tags=["👤 User Management — Tenants"], summary="Get Tenant",
          description="Retrieves tenant details by UUID. **Security:** Requires SUPER_ADMIN role.")
 async def get_tenant(tenant_id: str = Path(..., description="Tenant UUID"), current_user: dict = Depends(get_current_user)):
+    tenant_id = validate_uuid(tenant_id, "tenant_id")
     try:
         tenants = query_db("SELECT tenant_id, name, email, created_at, updated_at FROM tenants WHERE tenant_id = %s", (tenant_id,))
         if not tenants:
@@ -1479,7 +1494,8 @@ Creates a new user within an organization. Assigns role, department, designation
 async def create_user(body: CreateUserRequest, current_user: dict = Depends(get_current_user)):
     try:
         new_uid = str(uuid.uuid4())
-        hashed = bcrypt.hashpw((body.password or "password123").encode("utf-8"), bcrypt.gensalt(10)).decode("utf-8")
+        initial_password = body.password.strip() if (body.password and body.password.strip()) else secrets.token_urlsafe(16)
+        hashed = bcrypt.hashpw(initial_password.encode("utf-8"), bcrypt.gensalt(10)).decode("utf-8")
         dep_id = body.department_id if body.department_id else None
         desig_id = body.designation_id if body.designation_id else None
         execute_db("""
@@ -1495,7 +1511,10 @@ async def create_user(body: CreateUserRequest, current_user: dict = Depends(get_
         if role_id:
             execute_db("INSERT INTO user_roles (user_id, role_id) VALUES (%s, %s)", (new_uid, role_id))
 
-        return {"success": True, "user_id": new_uid, "name": body.name, "email": body.email}
+        res_payload = {"success": True, "user_id": new_uid, "name": body.name, "email": body.email}
+        if not (body.password and body.password.strip()):
+            res_payload["temporary_password"] = initial_password
+        return res_payload
     except Exception as e:
         raise HTTPException(500, str(e))
 
@@ -1528,6 +1547,7 @@ async def list_users(
 @app.get("/api/v1/users/{user_id}", tags=["👤 User Management — Users"], summary="Get User",
          description="Retrieves full user profile including roles, permissions, department, designation, active status, and signature URL.")
 async def get_user(user_id: str = Path(..., description="User UUID"), current_user: dict = Depends(get_current_user)):
+    user_id = validate_uuid(user_id, "user_id")
     try:
         users = query_db("""
             SELECT u.user_id, u.name, u.email, u.tenant_id, u.department_id, u.designation_id,
@@ -1620,6 +1640,7 @@ async def remove_user_from_org(user_id: str, org_id: str):
 @app.get("/api/v1/users/{user_id}/organizations", tags=["👤 User Management — Organizations"], summary="List User Organizations",
          description="Lists all organizations a user belongs to, including their role, department, and designation in each.")
 async def list_user_orgs(user_id: str = Path(..., description="User UUID")):
+    user_id = validate_uuid(user_id, "user_id")
     try:
         orgs = query_db("""
             SELECT uo.user_id, uo.org_id, o.name as org_name, o.code as org_code, 
@@ -1731,9 +1752,12 @@ async def list_organizations(page: int = Query(1, ge=1), page_size: int = Query(
 @app.get("/api/v1/tenants/{tenant_id}/organizations", tags=["🏢 Organization Service"], summary="List Organizations by Tenant",
          description="Lists all organizations belonging to a specific tenant. Used for tenant-scoped views.")
 async def list_orgs_by_tenant(tenant_id: str, page: int = Query(1), page_size: int = Query(20), current_user: dict = Depends(get_current_user)):
+    tenant_id = validate_uuid(tenant_id, "tenant_id")
     try:
         orgs = query_db("SELECT org_id, name, code, description FROM organizations WHERE tenant_id = %s ORDER BY name LIMIT %s OFFSET %s", (tenant_id, page_size, (page - 1) * page_size))
         return {"organizations": orgs, "total_count": len(orgs)}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(500, str(e))
 
@@ -1741,9 +1765,12 @@ async def list_orgs_by_tenant(tenant_id: str, page: int = Query(1), page_size: i
 @app.get("/api/v1/organizations/{parent_org_id}/children", tags=["🏢 Organization Service"], summary="List Child Organizations",
          description="Lists all child organizations under a specific parent organization.")
 async def list_child_orgs(parent_org_id: str, page: int = Query(1), page_size: int = Query(20), current_user: dict = Depends(get_current_user)):
+    parent_org_id = validate_uuid(parent_org_id, "parent_org_id")
     try:
         orgs = query_db("SELECT org_id, name, code, description FROM organizations WHERE org_id != %s ORDER BY name LIMIT %s OFFSET %s", (parent_org_id, page_size, (page - 1) * page_size))
         return {"organizations": orgs, "total_count": len(orgs)}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(500, str(e))
 
@@ -1751,6 +1778,7 @@ async def list_child_orgs(parent_org_id: str, page: int = Query(1), page_size: i
 @app.get("/api/v1/organizations/{org_id}", tags=["🏢 Organization Service"], summary="Get Organization",
          description="Retrieves a specific organization by UUID including all fields and hierarchy info.")
 async def get_organization(org_id: str = Path(..., description="Organization UUID"), current_user: dict = Depends(get_current_user)):
+    org_id = validate_uuid(org_id, "org_id")
     try:
         orgs = query_db("SELECT org_id, tenant_id, name, code, description, database_name, is_active FROM organizations WHERE org_id = %s", (org_id,))
         if not orgs:
@@ -1765,6 +1793,7 @@ async def get_organization(org_id: str = Path(..., description="Organization UUI
 @app.get("/api/v1/organizations/{org_id}/with-projects", tags=["🏢 Organization Service"], summary="Get Organization with Projects",
          description="Retrieves an organization and all its associated projects in a single call. Reduces N+1 queries.")
 async def get_org_with_projects(org_id: str, current_user: dict = Depends(get_current_user)):
+    org_id = validate_uuid(org_id, "org_id")
     try:
         orgs = query_db("SELECT org_id, tenant_id, name, code, description FROM organizations WHERE org_id = %s", (org_id,))
         if not orgs:

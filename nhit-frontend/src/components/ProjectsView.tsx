@@ -17,7 +17,7 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({
   const filtered = projects.filter((p) => {
     if (!searchQuery) return true;
     const q = searchQuery.toLowerCase();
-    return p.name.toLowerCase().includes(q) || p.code.toLowerCase().includes(q);
+    return (p.name || '').toLowerCase().includes(q) || (p.code || '').toLowerCase().includes(q);
   });
 
   return (

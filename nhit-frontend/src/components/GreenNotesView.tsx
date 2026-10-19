@@ -24,8 +24,8 @@ export const GreenNotesView: React.FC<GreenNotesViewProps> = ({
     if (!searchQuery) return true;
     const q = searchQuery.toLowerCase();
     return (
-      n.sl_no.toLowerCase().includes(q) ||
-      n.project_name.toLowerCase().includes(q) ||
+      (n.sl_no || n.id || '').toLowerCase().includes(q) ||
+      (n.project_name || '').toLowerCase().includes(q) ||
       (n.vendor_name || n.supplier_name || '').toLowerCase().includes(q)
     );
   });
