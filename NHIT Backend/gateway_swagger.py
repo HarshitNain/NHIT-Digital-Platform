@@ -120,15 +120,60 @@ def decode_jwt_token(token: str) -> dict:
 from collections import defaultdict
 import time
 
-# Format: { session_temp_token: {"otp": "123456", "email": "...", "user_id": "...", "expires_at": float, "attempts": int} }
-OTP_STORE: Dict[str, dict] = {}
+class DistributedOTPStore:
+    """Distributed OTP session store with Redis support and thread-safe local fallback (OWASP API8:2023 mitigation)."""
+    def __init__(self):
+        self._local: Dict[str, dict] = {}
+        self._redis = None
+        redis_url = os.environ.get("REDIS_URL", "").strip()
+        if redis_url:
+            try:
+                import redis
+                self._redis = redis.from_url(redis_url, decode_responses=True)
+                print(f"[CACHE] Connected to distributed Redis OTP cache: {redis_url}")
+            except Exception as e:
+                print(f"[CACHE] Redis not available ({e}), using in-process OTP store.")
+
+    def set(self, token: str, data: dict, ttl_seconds: int = 300):
+        if self._redis:
+            try:
+                self._redis.setex(f"otp:{token}", ttl_seconds, json.dumps(data))
+                return
+            except Exception:
+                pass
+        self._local[token] = data
+
+    def get(self, token: str) -> Optional[dict]:
+        if self._redis:
+            try:
+                raw = self._redis.get(f"otp:{token}")
+                if raw:
+                    return json.loads(raw)
+            except Exception:
+                pass
+        self.clean_expired()
+        return self._local.get(token)
+
+    def delete(self, token: str):
+        if self._redis:
+            try:
+                self._redis.delete(f"otp:{token}")
+            except Exception:
+                pass
+        self._local.pop(token, None)
+
+    def clean_expired(self):
+        now = datetime.datetime.now(datetime.timezone.utc).timestamp()
+        expired = [k for k, v in self._local.items() if v.get("expires_at", 0) < now]
+        for k in expired:
+            self._local.pop(k, None)
+
+otp_store = DistributedOTPStore()
+OTP_STORE = otp_store  # Backward compatibility alias
 RATE_LIMIT_STORE: Dict[str, List[float]] = defaultdict(list)
 
 def clean_expired_otps():
-    now = datetime.datetime.now(datetime.timezone.utc).timestamp()
-    expired_keys = [k for k, v in OTP_STORE.items() if v.get("expires_at", 0) < now]
-    for k in expired_keys:
-        OTP_STORE.pop(k, None)
+    otp_store.clean_expired()
 
 def check_rate_limit(key: str, max_requests: int = 10, window_seconds: int = 60):
     """Enforces in-memory sliding-window rate limiting (OWASP API4:2023 mitigation)."""
@@ -938,13 +983,13 @@ async def login(body: LoginRequest, request: Request):
                 "type": "2fa_pending",
             }, expires_in_seconds=300)
 
-            OTP_STORE[temp_token] = {
+            otp_store.set(temp_token, {
                 "otp": otp,
                 "user_id": str(u["user_id"]),
                 "email": u["email"],
                 "expires_at": (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=300)).timestamp(),
                 "attempts": 0,
-            }
+            }, ttl_seconds=300)
 
             # Multi-Channel OTP Dispatcher (Resend / Brevo / Gmail SMTP / Twilio / Console Sandbox)
             dispatch_res = dispatch_otp(
@@ -981,25 +1026,26 @@ async def login(body: LoginRequest, request: Request):
           description="Verifies the 6-digit numeric OTP against the temporary 2FA session token and issues signed JWT tokens.")
 async def verify_login_otp(body: LoginOTPVerifyRequest):
     clean_expired_otps()
-    record = OTP_STORE.get(body.session_temp_token)
+    record = otp_store.get(body.session_temp_token)
     if not record:
         raise HTTPException(400, "2FA security session has expired or is invalid. Please log in again.")
 
     if record.get("expires_at", 0) < datetime.datetime.now(datetime.timezone.utc).timestamp():
-        OTP_STORE.pop(body.session_temp_token, None)
+        otp_store.delete(body.session_temp_token)
         raise HTTPException(400, "Two-factor OTP has expired. Please request a new code.")
 
     record["attempts"] = record.get("attempts", 0) + 1
     if record["attempts"] > 5:
-        OTP_STORE.pop(body.session_temp_token, None)
+        otp_store.delete(body.session_temp_token)
         raise HTTPException(400, "Too many incorrect OTP attempts. Please restart authentication.")
 
     if record["otp"] != body.otp.strip():
+        otp_store.set(body.session_temp_token, record, ttl_seconds=300)
         raise HTTPException(401, f"Incorrect 6-digit OTP code ({5 - record['attempts']} attempts remaining).")
 
     # OTP is verified! Consume it
     user_id = record["user_id"]
-    OTP_STORE.pop(body.session_temp_token, None)
+    otp_store.delete(body.session_temp_token)
 
     users = query_db(
         "SELECT user_id, name, email, tenant_id, department_id, designation_id FROM users WHERE user_id = %s LIMIT 1",
@@ -1032,13 +1078,13 @@ async def request_login_otp(body: LoginOTPRequest, request: Request):
         "type": "2fa_pending",
     }, expires_in_seconds=300)
 
-    OTP_STORE[temp_token] = {
+    otp_store.set(temp_token, {
         "otp": otp,
         "user_id": str(u["user_id"]),
         "email": u["email"],
         "expires_at": (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=300)).timestamp(),
         "attempts": 0,
-    }
+    }, ttl_seconds=300)
 
     # Multi-Channel OTP Dispatcher
     dispatch_res = dispatch_otp(
