@@ -43,7 +43,7 @@ def seed():
     now = datetime.datetime.now(datetime.timezone.utc)
     
     # Password hash for "password123"
-    BCRYPT_PASSWORD = "$2a$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi"
+    BCRYPT_PASSWORD = "$2b$10$5NNOJur0EYGWpPFQkI4T7uDMWiOoZMRWQMWj7d6RxdPFtFspsiuly"
 
     print("🚀 Starting comprehensive seeding...")
 
@@ -245,6 +245,7 @@ def seed():
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (email) DO UPDATE SET 
                 name = EXCLUDED.name,
+                password = EXCLUDED.password,
                 department_id = EXCLUDED.department_id,
                 designation_id = EXCLUDED.designation_id,
                 updated_at = EXCLUDED.updated_at

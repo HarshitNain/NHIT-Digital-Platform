@@ -139,4 +139,24 @@ jobs:
           ENVIRONMENT: test
           API_BASE_URL: http://127.0.0.1:8080/api/v1
         run: |
-          python tests/run_ci_backend.py
+          set -o pipefail
+          python -u tests/run_ci_backend.py 2>&1 | tee ci_backend.log
+
+      - name: Publish Test Results to Job Summary
+        if: always()
+        run: |
+          echo "## 📊 Backend Integration & 2FA Test Suite Report" >> $GITHUB_STEP_SUMMARY
+          echo '```text' >> $GITHUB_STEP_SUMMARY
+          if [ -f ci_backend.log ]; then
+            cat ci_backend.log >> $GITHUB_STEP_SUMMARY
+          else
+            echo "No log generated." >> $GITHUB_STEP_SUMMARY
+          fi
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload Test Execution Log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-test-log
+          path: ci_backend.log
