@@ -40,6 +40,13 @@ async function fetchJSON<T>(endpoint: string, options?: RequestInit): Promise<T>
     headers,
   });
   if (!res.ok) {
+    if (res.status === 401 && endpoint !== '/auth/login' && endpoint !== '/auth/login-otp/verify') {
+      setAuthToken(null);
+      localStorage.removeItem('nhit_auth_user');
+      window.dispatchEvent(new CustomEvent('nhit:auth_expired', {
+        detail: 'Your session has expired or authentication is invalid. Please log in again.'
+      }));
+    }
     let errMessage = `API Error ${res.status}`;
     try {
       const err = await res.json();

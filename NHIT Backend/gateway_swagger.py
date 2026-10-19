@@ -213,6 +213,7 @@ def check_rate_limit(key: str, max_requests: int = 10, window_seconds: int = 60)
     if len(valid_window) >= max_requests:
         retry_after = int(window_seconds - (now - valid_window[0])) + 1
         RATE_LIMIT_STORE[key] = valid_window
+        print(f"[SECURITY_ALERT] [OWASP_A04] Rate limit exceeded for key='{key}': {len(valid_window)} attempts in {window_seconds}s. Returning 429.", flush=True)
         raise HTTPException(
             status_code=429,
             detail=f"Rate limit exceeded. Too many requests. Please retry after {retry_after} seconds.",
