@@ -801,10 +801,10 @@ class GreenNotePayload(BaseModel):
     tenant_id: str = Field("", description="Tenant UUID")
     approval_for: str = Field("INVOICE", description="INVOICE, ADVANCE, or ADHOC")
     department_name: str = Field("", description="Department name")
-    base_value: float = Field(0, description="Base value before tax")
-    gst: float = Field(0, description="GST amount")
-    other_charges: float = Field(0, description="Other charges")
-    total_amount: float = Field(0, description="Total amount (base + GST + charges)")
+    base_value: float = Field(0, ge=0, description="Base value before tax (must be non-negative)")
+    gst: float = Field(0, ge=0, description="GST amount (must be non-negative)")
+    other_charges: float = Field(0, ge=0, description="Other charges (must be non-negative)")
+    total_amount: float = Field(0, ge=0, description="Total amount (base + GST + charges, must be non-negative)")
     work_order_no: str = Field("", description="Work/Purchase order number")
     po_number: str = Field("", description="PO number")
     remarks: str = Field("", description="General remarks")
@@ -831,12 +831,12 @@ class PaymentNotePayload(BaseModel):
     project_name: str = Field("", description="Project name")
     invoice_no: str = Field("", description="Invoice number")
     invoice_date: str = Field("", description="Invoice date")
-    invoice_amount: float = Field(0, description="Invoice amount")
-    gross_amount: float = Field(0, description="Gross amount")
-    net_payable_amount: float = Field(0, description="Net payable")
-    tds_percentage: float = Field(0, description="TDS %")
+    invoice_amount: float = Field(0, ge=0, description="Invoice amount (must be non-negative)")
+    gross_amount: float = Field(0, ge=0, description="Gross amount (must be non-negative)")
+    net_payable_amount: float = Field(0, ge=0, description="Net payable (must be non-negative)")
+    tds_percentage: float = Field(0, ge=0, le=100, description="TDS % (0 to 100)")
     tds_section: str = Field("", description="TDS section e.g. 194C")
-    tds_amount: float = Field(0, description="TDS amount")
+    tds_amount: float = Field(0, ge=0, description="TDS amount (must be non-negative)")
     account_holder_name: str = Field("", description="Bank account holder")
     bank_name: str = Field("", description="Bank name")
     account_number: str = Field("", description="Account number")
@@ -897,7 +897,7 @@ class ReimbursementExpenseInput(BaseModel):
     bill_date: str = Field("", description="Bill date ISO-8601")
     bill_number: str = Field("", description="Bill number")
     vendor_name: str = Field("", description="Vendor name")
-    bill_amount: float = Field(0, description="Bill amount")
+    bill_amount: float = Field(0, ge=0, description="Bill amount (must be non-negative)")
     remarks: str = Field("", description="Remarks")
 
 class ReimbursementNotePayload(BaseModel):
@@ -2253,6 +2253,8 @@ Creates a new Green Note (approval/expenditure note) for vendor payments.
 **Required Context:** JWT must contain org_id and tenant_id.
 """)
 async def create_green_note(body: CreateGreenNoteRequest):
+    if body.note.base_value < 0 or body.note.total_amount < 0 or body.note.gst < 0 or body.note.other_charges < 0:
+        raise HTTPException(422, "Financial disbursement values (base_value, total_amount, gst, other_charges) cannot be negative.")
     new_id = f"gn-550e8400-{len(GREEN_NOTES_STORE) + 1:04d}"
     item = {
         "id": new_id,
@@ -2734,7 +2736,16 @@ Creates a new reimbursement note for employee expense claims.
 async def create_reimbursement_note(body: Dict[str, Any] = Body(...)):
     note_data = body.get("note", body) if isinstance(body, dict) else {}
     expenses = body.get("expenses", []) if isinstance(body, dict) else []
-    total_amt = sum(e.get("bill_amount", 0) for e in expenses) if expenses else float(note_data.get("amount", note_data.get("total_amount", 0)))
+    
+    for e in expenses:
+        if isinstance(e, dict):
+            amt = float(e.get("bill_amount", e.get("amount", 0)))
+            if amt < 0:
+                raise HTTPException(422, "Reimbursement expense items cannot have negative amounts.")
+                
+    total_amt = sum(float(e.get("bill_amount", e.get("amount", 0))) for e in expenses if isinstance(e, dict)) if expenses else float(note_data.get("amount", note_data.get("total_amount", 0)))
+    if total_amt < 0:
+        raise HTTPException(422, "Total reimbursement claim amount cannot be negative.")
     new_id = len(REIMBURSEMENTS_STORE) + 1
     new_item = {
         "id": new_id,
