@@ -36,7 +36,7 @@ import jwt  # PyJWT 2.15.1
 import psycopg2
 import psycopg2.extras
 import uvicorn
-from fastapi import FastAPI, HTTPException, Query, Path, Body, Depends, Header
+from fastapi import FastAPI, HTTPException, Query, Path, Body, Depends, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
@@ -116,14 +116,35 @@ def decode_jwt_token(token: str) -> dict:
         raise HTTPException(401, f"Invalid or expired JWT token: {str(e)}")
 
 # In-memory OTP storage for Two-Factor (2-Way) Authentication
+from collections import defaultdict
+import time
+
 # Format: { session_temp_token: {"otp": "123456", "email": "...", "user_id": "...", "expires_at": float, "attempts": int} }
 OTP_STORE: Dict[str, dict] = {}
+RATE_LIMIT_STORE: Dict[str, List[float]] = defaultdict(list)
 
 def clean_expired_otps():
     now = datetime.datetime.now(datetime.timezone.utc).timestamp()
     expired_keys = [k for k, v in OTP_STORE.items() if v.get("expires_at", 0) < now]
     for k in expired_keys:
         OTP_STORE.pop(k, None)
+
+def check_rate_limit(key: str, max_requests: int = 10, window_seconds: int = 60):
+    """Enforces in-memory sliding-window rate limiting (OWASP API4:2023 mitigation)."""
+    if os.environ.get("ENVIRONMENT") == "test":
+        return
+    now = time.time()
+    valid_window = [ts for ts in RATE_LIMIT_STORE[key] if now - ts < window_seconds]
+    if len(valid_window) >= max_requests:
+        retry_after = int(window_seconds - (now - valid_window[0])) + 1
+        RATE_LIMIT_STORE[key] = valid_window
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded. Too many requests. Please retry after {retry_after} seconds.",
+            headers={"Retry-After": str(retry_after)}
+        )
+    valid_window.append(now)
+    RATE_LIMIT_STORE[key] = valid_window
 
 def generate_numeric_otp(length: int = 6) -> str:
     return "".join(secrets.choice("0123456789") for _ in range(length))
@@ -880,7 +901,9 @@ Authenticates a user against PostgreSQL `users` using bcrypt password verificati
 If 2FA is active (default for enhanced security), generates a 6-digit numeric OTP and returns a temporary 2FA session challenge.
 If 2FA is bypassed/completed, issues signed HMAC-SHA256 JWT access and refresh tokens with user's real roles and permissions.
 """)
-async def login(body: LoginRequest):
+async def login(body: LoginRequest, request: Request):
+    client_ip = request.client.host if request.client else "127.0.0.1"
+    check_rate_limit(f"login:{body.login.strip().lower()}:{client_ip}", max_requests=10, window_seconds=60)
     try:
         users = query_db(
             "SELECT user_id, name, email, password, tenant_id, department_id, designation_id FROM users WHERE email = %s LIMIT 1",
@@ -989,7 +1012,9 @@ async def verify_login_otp(body: LoginOTPVerifyRequest):
 
 @app.post("/api/v1/auth/login-otp/request", tags=["🔐 Auth Service"], summary="Request Passwordless Login OTP",
           description="Requests a 6-digit OTP sent to registered email for passwordless 2-way authentication.")
-async def request_login_otp(body: LoginOTPRequest):
+async def request_login_otp(body: LoginOTPRequest, request: Request):
+    client_ip = request.client.host if request.client else "127.0.0.1"
+    check_rate_limit(f"otp:{body.email.strip().lower()}:{client_ip}", max_requests=5, window_seconds=60)
     clean_expired_otps()
     users = query_db(
         "SELECT user_id, name, email FROM users WHERE email = %s LIMIT 1",
