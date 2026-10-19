@@ -135,6 +135,19 @@ export function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
+  // Listen for session expiry from API service (OPEN-10)
+  useEffect(() => {
+    const handleAuthExpired = (e: Event) => {
+      const customEvent = e as CustomEvent<string>;
+      setIsAuthenticated(false);
+      setCurrentAuthUser(null);
+      setLandingViewMode('login');
+      addToast(customEvent.detail || 'Session expired. Please log in again.', 'error');
+    };
+    window.addEventListener('nhit:auth_expired', handleAuthExpired);
+    return () => window.removeEventListener('nhit:auth_expired', handleAuthExpired);
+  }, []);
+
   // Load backend data
   const loadData = useCallback(async () => {
     setLoading(true);
