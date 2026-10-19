@@ -85,6 +85,12 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
+  changePassword: (data: { new_password: string; confirm_password?: string; session_temp_token?: string }) =>
+    fetchJSON<LoginResponse>('/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
   validateToken: (token: string) =>
     fetchJSON<{
       valid: boolean;
@@ -210,11 +216,12 @@ export const api = {
     name: string;
     email: string;
     password?: string;
+    must_change_password?: boolean;
     department_id?: string;
     designation_id?: string;
     org_id?: string;
     tenant_id?: string;
-  }) => fetchJSON<{ success: boolean }>('/users', {
+  }) => fetchJSON<{ success: boolean; temporary_password?: string; user_id?: string; must_change_password?: boolean }>('/users', {
     method: 'POST',
     body: JSON.stringify({
       tenant_id: '550e8400-e29b-41d4-a716-446655440000',

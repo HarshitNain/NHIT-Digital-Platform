@@ -708,17 +708,23 @@ class CreateProjectRequest(BaseModel):
 
 # ---- User Management ----
 class CreateUserRequest(BaseModel):
-    tenant_id: str = Field(..., description="Tenant UUID")
-    org_id: str = Field(..., description="Organization UUID")
+    tenant_id: Optional[str] = Field("550e8400-e29b-41d4-a716-446655440000", description="Tenant UUID")
+    org_id: Optional[str] = Field("550e8400-e29b-41d4-a716-446655440001", description="Organization UUID")
     email: str = Field(..., json_schema_extra={"example": "engineer@nhit.com"})
     name: str = Field(..., json_schema_extra={"example": "Rajesh Kumar"})
-    password: str = Field(..., json_schema_extra={"example": "securePass123!"})
+    password: Optional[str] = Field(None, json_schema_extra={"example": "securePass123!"})
+    must_change_password: Optional[bool] = Field(True, description="Force password change on initial sign-in")
     role_id: str = Field("", description="Role UUID")
     department_id: str = Field("", description="Department UUID")
     designation_id: str = Field("", description="Designation UUID")
     project_ids: List[str] = Field(default=[], description="Assigned project UUIDs")
     created_by: str = Field("", description="Admin user UUID")
     contact_number: str = Field("", description="Phone number")
+
+class ChangePasswordRequest(BaseModel):
+    new_password: str = Field(..., min_length=8, description="New secure password")
+    confirm_password: Optional[str] = Field(None, description="Password confirmation")
+    session_temp_token: Optional[str] = Field(None, description="Temporary session token when PASSWORD_CHANGE_REQUIRED")
 
 class UpdateUserRequest(BaseModel):
     name: Optional[str] = None
@@ -996,10 +1002,16 @@ async def login(body: LoginRequest, request: Request):
     client_ip = request.client.host if request.client else "127.0.0.1"
     check_rate_limit(f"login:{body.login.strip().lower()}:{client_ip}", max_requests=10, window_seconds=60)
     try:
-        users = query_db(
-            "SELECT user_id, name, email, password, tenant_id, department_id, designation_id FROM users WHERE email = %s LIMIT 1",
-            (body.login.strip().lower(),),
-        )
+        try:
+            users = query_db(
+                "SELECT user_id, name, email, password, tenant_id, department_id, designation_id, must_change_password FROM users WHERE email = %s LIMIT 1",
+                (body.login.strip().lower(),),
+            )
+        except Exception:
+            users = query_db(
+                "SELECT user_id, name, email, password, tenant_id, department_id, designation_id FROM users WHERE email = %s LIMIT 1",
+                (body.login.strip().lower(),),
+            )
         if not users:
             raise HTTPException(404, "User account not found with this email")
         u = users[0]
@@ -1016,6 +1028,21 @@ async def login(body: LoginRequest, request: Request):
 
         if not password_valid:
             raise HTTPException(401, "Invalid password credentials")
+
+        # Check if mandatory password change is required upon first login (OPEN-03)
+        if u.get("must_change_password") is True:
+            temp_token = create_jwt_token({
+                "sub": str(u["user_id"]),
+                "email": u["email"],
+                "type": "password_change_required",
+            }, expires_in_seconds=600)
+            return {
+                "status": "PASSWORD_CHANGE_REQUIRED",
+                "session_temp_token": temp_token,
+                "message": "Temporary or initial password in use. Mandatory password update required before accessing the platform.",
+                "user_id": str(u["user_id"]),
+                "email": u["email"],
+            }
 
         clean_expired_otps()
 
@@ -1092,14 +1119,35 @@ async def verify_login_otp(body: LoginOTPVerifyRequest):
     user_id = record["user_id"]
     otp_store.delete(body.session_temp_token)
 
-    users = query_db(
-        "SELECT user_id, name, email, tenant_id, department_id, designation_id FROM users WHERE user_id = %s LIMIT 1",
-        (user_id,),
-    )
+    try:
+        users = query_db(
+            "SELECT user_id, name, email, tenant_id, department_id, designation_id, must_change_password FROM users WHERE user_id = %s LIMIT 1",
+            (user_id,),
+        )
+    except Exception:
+        users = query_db(
+            "SELECT user_id, name, email, tenant_id, department_id, designation_id FROM users WHERE user_id = %s LIMIT 1",
+            (user_id,),
+        )
     if not users:
         raise HTTPException(404, "User account not found")
 
-    return issue_user_jwt_tokens(users[0], auth_method="password_otp")
+    u = users[0]
+    if u.get("must_change_password") is True:
+        temp_token = create_jwt_token({
+            "sub": str(u["user_id"]),
+            "email": u["email"],
+            "type": "password_change_required",
+        }, expires_in_seconds=600)
+        return {
+            "status": "PASSWORD_CHANGE_REQUIRED",
+            "session_temp_token": temp_token,
+            "message": "Temporary or initial password in use. Mandatory password update required before accessing the platform.",
+            "user_id": str(u["user_id"]),
+            "email": u["email"],
+        }
+
+    return issue_user_jwt_tokens(u, auth_method="password_otp")
 
 
 @app.post("/api/v1/auth/login-otp/request", tags=["🔐 Auth Service"], summary="Request Passwordless Login OTP",
@@ -1248,6 +1296,46 @@ async def forgot_password(body: ForgotPasswordRequest):
           description="Resets the user's password.")
 async def reset_password(body: ResetPasswordRequest):
     return {"message": "Password reset successful", "success": True}
+
+
+@app.post("/api/v1/auth/change-password", tags=["🔐 Auth Service"], summary="Change Initial / Expired Password",
+          description="Sets a new password and clears must_change_password flag. Accepts Bearer token or session_temp_token.")
+async def change_password(body: ChangePasswordRequest, authorization: Optional[str] = Header(None)):
+    user_id = None
+    if body.session_temp_token:
+        try:
+            payload = decode_jwt_token(body.session_temp_token)
+            if payload.get("type") in ("password_change_required", "2fa_pending"):
+                user_id = payload.get("sub")
+        except Exception:
+            raise HTTPException(401, "Invalid or expired password reset token.")
+    elif authorization and authorization.startswith("Bearer "):
+        token = authorization.split(" ")[1]
+        try:
+            payload = decode_jwt_token(token)
+            user_id = payload.get("sub")
+        except Exception:
+            raise HTTPException(401, "Invalid authorization token.")
+    
+    if not user_id:
+        raise HTTPException(401, "Authentication required to change password.")
+
+    if body.confirm_password and body.new_password != body.confirm_password:
+        raise HTTPException(400, "New password and confirmation password do not match.")
+
+    # Hash new password
+    hashed = bcrypt.hashpw(body.new_password.encode("utf-8"), bcrypt.gensalt(10)).decode("utf-8")
+    try:
+        execute_db("""
+            UPDATE users SET password = %s, must_change_password = FALSE, updated_at = NOW() WHERE user_id = %s
+        """, (hashed, user_id))
+    except Exception:
+        execute_db("UPDATE users SET password = %s, updated_at = NOW() WHERE user_id = %s", (hashed, user_id))
+
+    users = query_db("SELECT user_id, name, email, tenant_id, department_id, designation_id FROM users WHERE user_id = %s LIMIT 1", (user_id,))
+    if users:
+        return issue_user_jwt_tokens(users[0], auth_method="password")
+    return {"status": "SUCCESS", "message": "Password changed successfully. Please log in with your new password."}
 
 
 @app.post("/api/v1/auth/forgot-password-otp", tags=["🔐 Auth Service"], summary="Forgot Password (OTP)",
@@ -1499,10 +1587,17 @@ async def create_user(body: CreateUserRequest, current_user: dict = Depends(get_
         hashed = bcrypt.hashpw(initial_password.encode("utf-8"), bcrypt.gensalt(10)).decode("utf-8")
         dep_id = body.department_id if body.department_id else None
         desig_id = body.designation_id if body.designation_id else None
-        execute_db("""
-            INSERT INTO users (user_id, name, email, password, tenant_id, department_id, designation_id, created_at, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
-        """, (new_uid, body.name, body.email.strip().lower(), hashed, body.tenant_id or "550e8400-e29b-41d4-a716-446655440000", dep_id, desig_id))
+        must_change = True if body.must_change_password is not False else False
+        try:
+            execute_db("""
+                INSERT INTO users (user_id, name, email, password, tenant_id, department_id, designation_id, must_change_password, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+            """, (new_uid, body.name, body.email.strip().lower(), hashed, body.tenant_id or "550e8400-e29b-41d4-a716-446655440000", dep_id, desig_id, must_change))
+        except Exception:
+            execute_db("""
+                INSERT INTO users (user_id, name, email, password, tenant_id, department_id, designation_id, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+            """, (new_uid, body.name, body.email.strip().lower(), hashed, body.tenant_id or "550e8400-e29b-41d4-a716-446655440000", dep_id, desig_id))
         
         role_id = body.role_id
         if not role_id:
@@ -1512,7 +1607,7 @@ async def create_user(body: CreateUserRequest, current_user: dict = Depends(get_
         if role_id:
             execute_db("INSERT INTO user_roles (user_id, role_id) VALUES (%s, %s)", (new_uid, role_id))
 
-        res_payload = {"success": True, "user_id": new_uid, "name": body.name, "email": body.email}
+        res_payload = {"success": True, "user_id": new_uid, "name": body.name, "email": body.email, "must_change_password": must_change}
         if not (body.password and body.password.strip()):
             res_payload["temporary_password"] = initial_password
         return res_payload

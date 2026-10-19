@@ -39,12 +39,16 @@ export const LoginView: React.FC<LoginViewProps> = ({
   const [password, setPassword] = useState('password123');
   const [enable2FA, setEnable2FA] = useState(true);
 
-  // 2FA OTP Challenge States
-  const [loginStep, setLoginStep] = useState<'credentials' | 'otp_verify'>('credentials');
+  // 2FA OTP Challenge States & Password Change
+  const [loginStep, setLoginStep] = useState<'credentials' | 'otp_verify' | 'force_change_password'>('credentials');
   const [sessionTempToken, setSessionTempToken] = useState<string>('');
   const [devOtpPreview, setDevOtpPreview] = useState<string>('');
   const [otpDigits, setOtpDigits] = useState<string[]>(['', '', '', '', '', '']);
   const [otpCountdown, setOtpCountdown] = useState<number>(300);
+
+  // Mandatory Password Change (OPEN-03)
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
 
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
@@ -121,7 +125,11 @@ export const LoginView: React.FC<LoginViewProps> = ({
           enable_2fa: enable2FA,
         });
 
-        if (res.status === '2FA_REQUIRED' && res.session_temp_token) {
+        if (res.status === 'PASSWORD_CHANGE_REQUIRED' && res.session_temp_token) {
+          setSessionTempToken(res.session_temp_token);
+          setLoginStep('force_change_password');
+          setInfoMsg(res.message || 'Mandatory password update required before accessing the platform.');
+        } else if (res.status === '2FA_REQUIRED' && res.session_temp_token) {
           setSessionTempToken(res.session_temp_token);
           setDevOtpPreview(res.dev_otp_preview || '');
           setOtpDigits(['', '', '', '', '', '']);
@@ -176,7 +184,11 @@ export const LoginView: React.FC<LoginViewProps> = ({
 
     try {
       const res = await api.verifyLoginOTP(sessionTempToken, code);
-      if (res.token) {
+      if (res.status === 'PASSWORD_CHANGE_REQUIRED' && res.session_temp_token) {
+        setSessionTempToken(res.session_temp_token);
+        setLoginStep('force_change_password');
+        setInfoMsg(res.message || 'Mandatory password update required before accessing the platform.');
+      } else if (res.token) {
         setAuthToken(res.token);
         onLoginSuccess({
           user_id: res.user_id!,
@@ -195,9 +207,98 @@ export const LoginView: React.FC<LoginViewProps> = ({
     }
   };
 
-  // Google SSO Trigger
+  // Step 3: Handle Mandatory Password Change (OPEN-03)
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newPassword || newPassword.length < 8) {
+      setErrorMsg('New password must be at least 8 characters long.');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setErrorMsg('New password and confirmation password do not match.');
+      return;
+    }
+
+    setErrorMsg('');
+    setLoading(true);
+
+    try {
+      const res = await api.changePassword({
+        new_password: newPassword,
+        confirm_password: confirmPassword,
+        session_temp_token: sessionTempToken,
+      });
+
+      if (res.token) {
+        setAuthToken(res.token);
+        onLoginSuccess({
+          user_id: res.user_id!,
+          email: res.email!,
+          name: res.name!,
+          roles: res.roles || ['employee'],
+          permissions: res.permissions || [],
+          auth_method: 'password',
+          portalMode,
+        });
+      } else {
+        setLoginStep('credentials');
+        setInfoMsg('Password updated successfully. Please sign in with your new password.');
+        setPassword(newPassword);
+      }
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Password update failed.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Google SSO Trigger with Google Identity Services GIS Prompt (OPEN-11)
   const handleGoogleSSO = async () => {
     setErrorMsg('');
+    const gWindow = window as any;
+    if (gWindow.google?.accounts?.id) {
+      try {
+        gWindow.google.accounts.id.initialize({
+          client_id: '984321045981-nhit-digital-platform.apps.googleusercontent.com',
+          callback: async (credentialResponse: any) => {
+            if (credentialResponse?.credential) {
+              setLoading(true);
+              try {
+                const res = await api.googleSSO({ credential: credentialResponse.credential });
+                if (res.token) {
+                  setAuthToken(res.token);
+                  onLoginSuccess({
+                    user_id: res.user_id!,
+                    email: res.email!,
+                    name: res.name!,
+                    roles: res.roles || ['employee'],
+                    permissions: res.permissions || [],
+                    auth_method: 'google_sso',
+                    portalMode,
+                  });
+                }
+              } catch (err: any) {
+                setErrorMsg(err.message || 'Google SSO verification failed.');
+              } finally {
+                setLoading(false);
+              }
+            }
+          },
+        });
+        gWindow.google.accounts.id.prompt((notification: any) => {
+          if (notification && (notification.isNotDisplayed?.() || notification.isSkippedMoment?.())) {
+            triggerDirectGoogleSSO();
+          }
+        });
+        return;
+      } catch {
+        // Fallback to direct request
+      }
+    }
+    await triggerDirectGoogleSSO();
+  };
+
+  const triggerDirectGoogleSSO = async () => {
     setLoading(true);
     try {
       const res = await api.googleSSO({
@@ -570,6 +671,84 @@ export const LoginView: React.FC<LoginViewProps> = ({
               <ArrowLeft size={14} />
               <span>Use different account / Go back</span>
             </button>
+          </div>
+        )}
+
+        {/* ================= STEP 3: MANDATORY PASSWORD CHANGE (OPEN-03) ================= */}
+        {loginStep === 'force_change_password' && (
+          <div className="otp-verification-card">
+            <div className="otp-badge-row">
+              <KeyRound size={20} color="var(--primary-color)" />
+              <h3 style={{ margin: 0 }}>Mandatory Password Update</h3>
+            </div>
+            <p className="otp-explainer">
+              Initial or temporary credentials are in use for <strong>{email}</strong>. In compliance with NHIT IT Security Policy, please configure a new permanent password.
+            </p>
+
+            <form onSubmit={handleChangePassword} className="login-form">
+              <div className="form-group">
+                <label>
+                  <Lock size={14} /> New Permanent Password (min. 8 characters)
+                </label>
+                <input
+                  type="password"
+                  required
+                  minLength={8}
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  placeholder="••••••••••••"
+                  className="login-input"
+                  autoComplete="new-password"
+                  autoFocus
+                />
+              </div>
+
+              <div className="form-group">
+                <label>
+                  <Lock size={14} /> Confirm Permanent Password
+                </label>
+                <input
+                  type="password"
+                  required
+                  minLength={8}
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  placeholder="••••••••••••"
+                  className="login-input"
+                  autoComplete="new-password"
+                />
+              </div>
+
+              <button
+                type="submit"
+                className="login-submit-btn"
+                disabled={loading || !newPassword || !confirmPassword}
+              >
+                {loading ? (
+                  <span className="spinner" style={{ width: 18, height: 18 }}></span>
+                ) : (
+                  <>
+                    <span>Update Password & Enter Portal</span>
+                    <ArrowRight size={16} />
+                  </>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setLoginStep('credentials');
+                  setErrorMsg('');
+                  setNewPassword('');
+                  setConfirmPassword('');
+                }}
+                className="login-back-btn"
+                style={{ justifyContent: 'center' }}
+              >
+                <ArrowLeft size={14} />
+                <span>Cancel & Return to Login</span>
+              </button>
+            </form>
           </div>
         )}
 

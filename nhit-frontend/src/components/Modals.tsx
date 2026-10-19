@@ -740,6 +740,8 @@ interface UserModalProps extends BaseModalProps {
   onSubmit: (data: {
     name: string;
     email: string;
+    password?: string;
+    must_change_password?: boolean;
     department_id?: string;
     designation_id?: string;
     org_id?: string;
@@ -756,6 +758,8 @@ export const UserModal: React.FC<UserModalProps> = ({
 }) => {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [mustChangePassword, setMustChangePassword] = useState(true);
   const [deptId, setDeptId] = useState(departments[0]?.id || '');
   const [desigId, setDesigId] = useState(designations[0]?.id || '');
   const [orgId, setOrgId] = useState(organizations[0]?.org_id || '');
@@ -770,6 +774,8 @@ export const UserModal: React.FC<UserModalProps> = ({
       await onSubmit({
         name,
         email,
+        password: password.trim() ? password.trim() : undefined,
+        must_change_password: mustChangePassword,
         department_id: deptId || undefined,
         designation_id: desigId || undefined,
         org_id: orgId || undefined,
@@ -813,6 +819,33 @@ export const UserModal: React.FC<UserModalProps> = ({
               onChange={(e) => setEmail(e.target.value)}
               required
             />
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">Initial Password (Optional)</label>
+            <input
+              type="password"
+              className="input-field"
+              placeholder="Leave blank to auto-generate a secure random password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete="new-password"
+            />
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+              If left blank, a cryptographically secure random password will be generated.
+            </div>
+          </div>
+
+          <div className="form-group" style={{ marginBottom: '1rem' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.85rem' }}>
+              <input
+                type="checkbox"
+                checked={mustChangePassword}
+                onChange={(e) => setMustChangePassword(e.target.checked)}
+                style={{ cursor: 'pointer' }}
+              />
+              <span style={{ fontWeight: 500 }}>Require password change upon first login (OPEN-03 Hardening)</span>
+            </label>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>

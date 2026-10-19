@@ -103,6 +103,20 @@ services:
     networks:
       - nhit-network
 
+  # ----------------------------------------------------------------------------
+  # 5. SIEM & AUDIT: Fluent-Bit Centralized Log Shipper (OPEN-12)
+  # ----------------------------------------------------------------------------
+  fluent-bit:
+    image: fluent/fluent-bit:3.0
+    container_name: nhit-fluent-bit
+    restart: always
+    volumes:
+      - ./fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf:ro
+    ports:
+      - "24224:24224"
+    networks:
+      - nhit-network
+
 # ------------------------------------------------------------------------------
 # VOLUMES & NETWORKS
 # ------------------------------------------------------------------------------
