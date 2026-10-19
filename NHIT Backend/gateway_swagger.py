@@ -883,15 +883,17 @@ async def login(body: LoginRequest):
             )
             delivery_channel = ", ".join(dispatch_res["channels"]) if dispatch_res["channels"] else "Sandbox Console"
 
-            return {
+            resp_payload = {
                 "status": "2FA_REQUIRED",
                 "session_temp_token": temp_token,
                 "message": f"6-digit Two-Factor security code generated and sent to {u['email']} via {delivery_channel}",
                 "email": u["email"],
                 "expires_in": 300,
                 "delivery_channel": delivery_channel,
-                "dev_otp_preview": otp,
             }
+            if os.environ.get("ENVIRONMENT") == "test":
+                resp_payload["dev_otp_preview"] = otp
+            return resp_payload
 
         # Direct login without 2FA
         return issue_user_jwt_tokens(u, auth_method="password")
@@ -973,15 +975,17 @@ async def request_login_otp(body: LoginOTPRequest):
     )
     delivery_channel = ", ".join(dispatch_res["channels"]) if dispatch_res["channels"] else "Sandbox Console"
 
-    return {
+    resp_payload = {
         "status": "2FA_REQUIRED",
         "session_temp_token": temp_token,
         "message": f"A 6-digit one-time passcode has been sent to {u['email']} via {delivery_channel}.",
         "email": u["email"],
         "expires_in": 300,
         "delivery_channel": delivery_channel,
-        "dev_otp_preview": otp,
     }
+    if os.environ.get("ENVIRONMENT") == "test":
+        resp_payload["dev_otp_preview"] = otp
+    return resp_payload
 
 
 @app.post("/api/v1/auth/sso/google", tags=["🔐 Auth Service"], summary="Google SSO Authentication",
