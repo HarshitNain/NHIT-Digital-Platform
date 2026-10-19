@@ -217,7 +217,11 @@ export const LoginView: React.FC<LoginViewProps> = ({
         });
       }
     } catch (err: any) {
-      setErrorMsg(err.message || 'Google SSO failed.');
+      if (err.message && err.message.toLowerCase().includes('credential')) {
+        setErrorMsg('Google Single Sign-On requires verified OAuth credentials. In production environments, please log in with your assigned NHIT credentials below.');
+      } else {
+        setErrorMsg(err.message || 'Google SSO failed.');
+      }
     } finally {
       setLoading(false);
     }

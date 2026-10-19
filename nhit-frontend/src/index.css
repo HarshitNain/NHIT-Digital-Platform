@@ -862,10 +862,38 @@ select.form-control option {
 }
 
 @media print {
-  body * { visibility: hidden; }
-  .modal-backdrop, .modal-backdrop * { visibility: visible; }
-  .modal-backdrop { position: absolute; left: 0; top: 0; width: 100%; background: #fff !important; }
-  .modal-header, .modal-footer { display: none !important; }
+  body * { 
+    visibility: hidden; 
+  }
+  .modal-overlay, 
+  .modal-overlay *, 
+  .printable-voucher, 
+  .printable-voucher * { 
+    visibility: visible !important; 
+  }
+  .modal-overlay { 
+    position: absolute; 
+    left: 0; 
+    top: 0; 
+    width: 100%; 
+    background: #fff !important; 
+    padding: 0; 
+  }
+  .modal-content {
+    box-shadow: none !important;
+    border: none !important;
+    max-width: 100% !important;
+    width: 100% !important;
+    padding: 0 !important;
+    background: transparent !important;
+  }
+  .modal-header, 
+  .modal-footer, 
+  button, 
+  #sidebar, 
+  header { 
+    display: none !important; 
+  }
 }
 
 @media (max-width: 900px) {
