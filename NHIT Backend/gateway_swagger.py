@@ -29,6 +29,7 @@ import secrets
 import traceback
 import uuid
 import urllib.request
+import urllib.parse
 from typing import Any, Dict, List, Optional
 
 import bcrypt
@@ -1065,23 +1066,34 @@ async def request_login_otp(body: LoginOTPRequest, request: Request):
 @app.post("/api/v1/auth/sso/google", tags=["🔐 Auth Service"], summary="Google SSO Authentication",
           description="Authenticates via Google OAuth2 token/code or enterprise Google identity, linking or auto-provisioning database user and issuing signed JWT.")
 async def sso_google(body: GoogleSSOLoginRequest):
-    user_email = body.email
+    is_test_mode = os.environ.get("ENVIRONMENT") == "test"
+    user_email = None
     user_name = body.name or "Google Officer"
 
-    # If Google ID token credential provided, decode and verify
+    # Enforce cryptographic Google token verification (OWASP API2:2023 mitigation)
     if body.credential:
         try:
-            # Decode Google JWT unverified payload or query tokeninfo
-            parts = body.credential.split(".")
-            if len(parts) >= 2:
-                import base64
-                padded = parts[1] + "=" * (-len(parts[1]) % 4)
-                payload_str = base64.urlsafe_b64decode(padded.encode()).decode()
-                google_payload = json.loads(payload_str)
-                user_email = google_payload.get("email", user_email)
-                user_name = google_payload.get("name", user_name)
+            token_url = f"https://oauth2.googleapis.com/tokeninfo?id_token={urllib.parse.quote(body.credential)}"
+            req = urllib.request.Request(token_url, headers={"User-Agent": "NHIT-Gateway/2.0"})
+            with urllib.request.urlopen(req, timeout=5) as g_resp:
+                if g_resp.status == 200:
+                    g_data = json.loads(g_resp.read().decode("utf-8"))
+                    user_email = g_data.get("email")
+                    user_name = g_data.get("name", user_name)
+                    if not (g_data.get("email_verified") is True or g_data.get("email_verified") == "true"):
+                        raise HTTPException(401, "Google email address is not verified by Google.")
+        except HTTPException:
+            raise
         except Exception as e:
-            print(f"Google token decode fallback: {e}")
+            if is_test_mode and body.email:
+                user_email = body.email
+            else:
+                raise HTTPException(401, f"Google OAuth2 token verification failed: {e}")
+    elif is_test_mode and body.email:
+        # Automated CI/CD integration testing bypass strictly scoped to test mode
+        user_email = body.email
+    else:
+        raise HTTPException(401, "Missing or invalid Google OAuth2 credential. Direct email-only authentication is disabled.")
 
     if not user_email:
         raise HTTPException(400, "Google email is required for SSO authentication.")
