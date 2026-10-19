@@ -387,11 +387,23 @@ PostgreSQL on port **5433** with database **nhit_db**.
     license_info={"name": "Proprietary"},
 )
 
+# Configurable CORS with safe whitelisted origins (OWASP API7:2023 mitigation)
+DEFAULT_CORS_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:8080",
+    "http://127.0.0.1:8080",
+    "http://localhost",
+    "http://127.0.0.1",
+]
+env_cors = os.environ.get("CORS_ORIGINS", "")
+cors_origins = [o.strip() for o in env_cors.split(",") if o.strip()] if env_cors else DEFAULT_CORS_ORIGINS
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
