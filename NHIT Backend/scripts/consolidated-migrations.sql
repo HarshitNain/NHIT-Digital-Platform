@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS users (
     user_agent TEXT,
     department_id UUID,
     designation_id UUID,
+    must_change_password BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );

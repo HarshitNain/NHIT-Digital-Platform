@@ -68,6 +68,7 @@ export interface User {
   designation_name?: string;
   tenant_id?: string;
   last_login_at?: string;
+  must_change_password?: boolean;
 }
 
 export interface Organization {
@@ -119,7 +120,7 @@ export interface AuthUser {
 }
 
 export interface LoginResponse {
-  status?: 'SUCCESS' | '2FA_REQUIRED';
+  status?: 'SUCCESS' | '2FA_REQUIRED' | 'PASSWORD_CHANGE_REQUIRED';
   session_temp_token?: string;
   message?: string;
   email?: string;

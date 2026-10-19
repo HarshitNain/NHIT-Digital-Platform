@@ -339,13 +339,17 @@ export function App() {
     }
   };
 
-  const handleCreateUser = async (data: { name: string; email: string; department_id?: string; designation_id?: string; org_id?: string }) => {
+  const handleCreateUser = async (data: { name: string; email: string; password?: string; must_change_password?: boolean; department_id?: string; designation_id?: string; org_id?: string }) => {
     try {
-      await api.createUser(data);
+      const res = await api.createUser(data);
       const dept = departments.find((d) => d.id === data.department_id);
       const desig = designations.find((ds) => ds.id === data.designation_id);
-      setUsers((prev) => [{ user_id: `USR-${Math.floor(100 + Math.random() * 900)}`, name: data.name, email: data.email, department_name: dept?.name || 'General', designation_name: desig?.name || 'Officer' }, ...prev]);
-      addToast(`Officer ${data.name} provisioned`, 'success');
+      setUsers((prev) => [{ user_id: res.user_id || `USR-${Math.floor(100 + Math.random() * 900)}`, name: data.name, email: data.email, department_name: dept?.name || 'General', designation_name: desig?.name || 'Officer', must_change_password: data.must_change_password !== false }, ...prev]);
+      if (res.temporary_password) {
+        addToast(`Officer provisioned. Temporary password: ${res.temporary_password}`, 'success');
+      } else {
+        addToast(`Officer ${data.name} provisioned successfully`, 'success');
+      }
     } catch (err: any) {
       addToast(err.message || 'User creation failed', 'error');
     }

@@ -26,7 +26,7 @@ For each item, this report provides:
 | :---: | :--- | :--- | :---: | :--- | :---: | :---: |
 | **OPEN-01** | Open-Ended Workflow Status Injection on Payment Notes | **A04: Insecure Design** | **High** | `gateway_swagger.py` | ✅ **RESOLVED** | [PR #20](https://github.com/HarshitNain/NHIT-Digital-Platform/pull/20) |
 | **OPEN-02** | Unhandled PostgreSQL Type Errors (500s) on Non-UUID Paths | **A01: Broken Access Control** | **Medium** | `gateway_swagger.py` | ✅ **RESOLVED** | [PR #19](https://github.com/HarshitNain/NHIT-Digital-Platform/pull/19) |
-| **OPEN-03** | Default Initial Password on IAM Provisioned Officers | **A07: Identification & Auth** | **Medium** | `gateway_swagger.py`, `Modals.tsx` | ✅ **RESOLVED** | [PR #19](https://github.com/HarshitNain/NHIT-Digital-Platform/pull/19) |
+| **OPEN-03** | Default Initial Password on IAM Provisioned Officers | **A07: Identification & Auth** | **Medium** | `gateway_swagger.py`, `Modals.tsx` | ✅ **RESOLVED** | [PR #19](https://github.com/HarshitNain/NHIT-Digital-Platform/pull/19), [PR #22](https://github.com/HarshitNain/NHIT-Digital-Platform/pull/22) |
 | **OPEN-04** | Missing Modern Web Security Headers (CSP, Referrer-Policy, HSTS) | **A05: Security Misconfiguration** | **Medium** | `nginx/nginx.conf` | ✅ **RESOLVED** | [PR #19](https://github.com/HarshitNain/NHIT-Digital-Platform/pull/19) |
 | **OPEN-05** | Direct Port 5173 Frontend Container Missing Upstream API Proxy | **A05: Security Misconfiguration** | **Medium** | `nhit-frontend/nginx.conf` | ✅ **RESOLVED** | [PR #19](https://github.com/HarshitNain/NHIT-Digital-Platform/pull/19) |
 | **OPEN-06** | Missing `redis` Driver in Backend Production Dependencies | **A06: Outdated Components** | **Low** | `NHIT Backend/requirements.txt` | ✅ **RESOLVED** | [PR #18](https://github.com/HarshitNain/NHIT-Digital-Platform/pull/18) |
@@ -34,8 +34,8 @@ For each item, this report provides:
 | **OPEN-08** | Statutory Payment Advice Voucher Prints Blank (CSS Selector Mismatch) | **UI / Quality Assurance Defect** | **Medium** | `nhit-frontend/src/index.css` | ✅ **RESOLVED** | [PR #19](https://github.com/HarshitNain/NHIT-Digital-Platform/pull/19) |
 | **OPEN-09** | Search Filter Runtime Component Crash on Null Database Values | **UI / Quality Assurance Defect** | **Medium** | `GreenNotesView.tsx`, `VendorsView.tsx` | ✅ **RESOLVED** | [PR #19](https://github.com/HarshitNain/NHIT-Digital-Platform/pull/19) |
 | **OPEN-10** | Silent 401 Session Expiry Falling Back to Mock Fallback Data | **UI / Session Management** | **Low** | `App.tsx`, `services/api.ts` | ✅ **RESOLVED** | [PR #18](https://github.com/HarshitNain/NHIT-Digital-Platform/pull/18) |
-| **OPEN-11** | Google SSO Client-Side ID Token Popup Integration Missing | **A07: Identification & Auth** | **Medium** | `LoginView.tsx` | ✅ **RESOLVED** | [PR #19](https://github.com/HarshitNain/NHIT-Digital-Platform/pull/19) |
-| **OPEN-12** | Absence of Centralized SIEM Log Shipping & Alerting | **A09: Logging & Monitoring** | **Low** | Deployment Infrastructure | ✅ **RESOLVED** | [PR #18](https://github.com/HarshitNain/NHIT-Digital-Platform/pull/18) |
+| **OPEN-11** | Google SSO Client-Side ID Token Popup Integration Missing | **A07: Identification & Auth** | **Medium** | `LoginView.tsx` | ✅ **RESOLVED** | [PR #19](https://github.com/HarshitNain/NHIT-Digital-Platform/pull/19), [PR #22](https://github.com/HarshitNain/NHIT-Digital-Platform/pull/22) |
+| **OPEN-12** | Absence of Centralized SIEM Log Shipping & Alerting | **A09: Logging & Monitoring** | **Low** | Deployment Infrastructure | ✅ **RESOLVED** | [PR #18](https://github.com/HarshitNain/NHIT-Digital-Platform/pull/18), [PR #22](https://github.com/HarshitNain/NHIT-Digital-Platform/pull/22) |
 
 ---
 
