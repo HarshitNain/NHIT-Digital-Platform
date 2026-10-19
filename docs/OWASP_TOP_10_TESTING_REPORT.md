@@ -18,9 +18,9 @@ A comprehensive, defense-in-depth security audit and quality assurance evaluatio
 
 ### Scorecard Summary
 - **Total Security & Functional Checkpoints Evaluated:** 24
-- **Passed / Strongly Defended Controls:** 12
-- **Vulnerabilities Successfully Remediated (PRs Merged to Main):** 9
-- **Identified Open Quality Assurance & Architecture Limitations:** 3
+- **Passed / Strongly Defended Controls:** 9
+- **Vulnerabilities & Limitations Successfully Remediated (PRs Merged to Main):** 15 (100% of all identified items)
+- **Identified Open Vulnerabilities / Limitations:** 0
 - **CI/CD Pipeline Status:** 100% Green (Passing across all 3 workflow jobs)
 
 ---
@@ -31,26 +31,26 @@ A comprehensive, defense-in-depth security audit and quality assurance evaluatio
 | :---: | :--- | :--- | :--- | :---: | :---: | :---: |
 | **SEC-01** | **A01: Broken Access Control** | BOLA / Missing Authentication on Core User, Tenant, & Org CRUD Routes | `gateway_swagger.py` | **RESOLVED** | Critical | [PR #16](https://github.com/HarshitNain/NHIT-Digital-Platform/pull/16) (Fixes #1) |
 | **SEC-02** | **A01: Broken Access Control** | Directory & Path Traversal Fuzzing (`/code/../../etc/passwd`) | `gateway_swagger.py` | **PASSED** | Low | Neutralized by Starlette Router (HTTP 404) |
-| **SEC-03** | **A01: Broken Access Control** | Non-UUID Parameter Validation on Dynamic Routes | `gateway_swagger.py` | **OPEN (Limitation)** | Medium | Requires UUID regex/validator on path params |
+| **SEC-03** | **A01: Broken Access Control** | Non-UUID Parameter Validation on Dynamic Routes | `gateway_swagger.py` | **RESOLVED** | Medium | [PR #19](https://github.com/HarshitNain/NHIT-Digital-Platform/pull/19) (`validate_uuid`) |
 | **SEC-04** | **A02: Cryptographic Failures** | Plaintext OTP Leakage via `dev_otp_preview` in API Responses | `gateway_swagger.py` | **RESOLVED** | Critical | [PR #9](https://github.com/HarshitNain/NHIT-Digital-Platform/pull/9) (Fixes #2) |
 | **SEC-05** | **A02: Cryptographic Failures** | Hardcoded Fallback JWT Secrets & Development Passwords | `gateway_swagger.py`, `docker-compose.yml` | **RESOLVED** | High | [PR #11](https://github.com/HarshitNain/NHIT-Digital-Platform/pull/11) (Fixes #5) |
 | **SEC-06** | **A02: Cryptographic Failures** | Password Hashing & CSPRNG OTP Generation | `gateway_swagger.py` | **PASSED** | Low | Bcrypt work factor 10 & `secrets` module |
 | **SEC-07** | **A03: Injection** | SQL Injection Resistance via Parameterized Queries | `gateway_swagger.py`, Microservices | **PASSED** | Low | Parameterized `%s` placeholders across all DB calls |
 | **SEC-08** | **A03: Injection** | Cross-Site Scripting (XSS) in UI Input Renderers | React JSX / Components | **PASSED** | Low | Virtual DOM automatic text encoding |
 | **SEC-09** | **A04: Insecure Design** | Negative Financial Disbursement Amounts Accepted | `gateway_swagger.py` | **RESOLVED** | Critical | [PR #17](https://github.com/HarshitNain/NHIT-Digital-Platform/pull/17) |
-| **SEC-10** | **A04: Insecure Design** | Open-Ended Status Patching on Payment Notes | `gateway_swagger.py` | **OPEN (Limitation)** | High | Requires Enum status whitelist validation |
+| **SEC-10** | **A04: Insecure Design** | Open-Ended Status Patching on Payment Notes | `gateway_swagger.py` | **RESOLVED** | High | [PR #20](https://github.com/HarshitNain/NHIT-Digital-Platform/pull/20) (`PaymentNoteStatus`) |
 | **SEC-11** | **A04: Insecure Design** | Query Parameter Resource Exhaustion / Pagination Denial of Service | `gateway_swagger.py` | **PASSED** | Low | Pydantic strict bounds `ge=1, le=100` |
 | **SEC-12** | **A05: Security Misconfiguration** | Insecure CORS Configuration with Wildcard Origin & Credentials | `gateway_swagger.py` | **RESOLVED** | High | [PR #10](https://github.com/HarshitNain/NHIT-Digital-Platform/pull/10) (Fixes #4) |
 | **SEC-13** | **A05: Security Misconfiguration** | Database Error Tracebacks & Schema Leakage in 500 Responses | `gateway_swagger.py` | **RESOLVED** | Medium | [PR #12](https://github.com/HarshitNain/NHIT-Digital-Platform/pull/12) (Fixes #7) |
 | **SEC-14** | **A05: Security Misconfiguration** | HTTP Header Hardening (`X-Frame-Options`, `X-Content-Type-Options`) | `nginx/nginx.conf` | **PASSED** | Low | Nginx reverse proxy headers active |
-| **SEC-15** | **A05: Security Misconfiguration** | Content-Security-Policy (CSP) & Modern HTTP Security Headers | `nginx/nginx.conf` | **OPEN (Limitation)** | Medium | CSP and Referrer-Policy recommended |
+| **SEC-15** | **A05: Security Misconfiguration** | Content-Security-Policy (CSP) & Modern HTTP Security Headers | `nginx/nginx.conf` | **RESOLVED** | Medium | [PR #19](https://github.com/HarshitNain/NHIT-Digital-Platform/pull/19) (CSP, Referrer, Permissions) |
 | **SEC-16** | **A06: Outdated Components** | Modernity & CVE Health of Dependencies | `package.json`, `requirements.txt` | **PASSED** | Low | React 19, FastAPI 0.115, Node 22 active |
-| **SEC-17** | **A06: Outdated Components** | Redis Client Driver in Python Requirements | `requirements.txt` | **OPEN (Limitation)** | Low | Add `redis>=5.0.0` for horizontal clustering |
+| **SEC-17** | **A06: Outdated Components** | Redis Client Driver in Python Requirements | `requirements.txt` | **RESOLVED** | Low | [PR #18](https://github.com/HarshitNain/NHIT-Digital-Platform/pull/18) (`redis>=5.0.0`) |
 | **SEC-18** | **A07: Identification & Auth Failures** | Google SSO Authentication Bypass via Unverified Claims | `gateway_swagger.py` | **RESOLVED** | Critical | [PR #14](https://github.com/HarshitNain/NHIT-Digital-Platform/pull/14) (Fixes #3) |
 | **SEC-19** | **A07: Identification & Auth Failures** | Missing Rate Limiting on Login & OTP Dispatch | `gateway_swagger.py` | **RESOLVED** | Medium | [PR #13](https://github.com/HarshitNain/NHIT-Digital-Platform/pull/13) (Fixes #6) |
 | **SEC-20** | **A07: Identification & Auth Failures** | In-Memory Ephemeral State for 2FA Sessions | `gateway_swagger.py` | **RESOLVED** | Medium | [PR #15](https://github.com/HarshitNain/NHIT-Digital-Platform/pull/15) (Fixes #8) |
-| **SEC-21** | **A07: Identification & Auth Failures** | Default Initial Passwords for IAM Staff | `gateway_swagger.py`, `Modals.tsx` | **OPEN (Limitation)** | Medium | Requires `must_change_password` flag on first login |
-| **SEC-22** | **A08: Software & Data Integrity** | Pre-compiled Windows Binaries (`.exe`) in Git Repository | Repository Root & Microservices | **OPEN (Limitation)** | Medium | Exclude `*.exe` in `.gitignore` |
+| **SEC-21** | **A07: Identification & Auth Failures** | Default Initial Passwords for IAM Staff | `gateway_swagger.py`, `Modals.tsx` | **RESOLVED** | Medium | [PR #19](https://github.com/HarshitNain/NHIT-Digital-Platform/pull/19) (CSPRNG generation) |
+| **SEC-22** | **A08: Software & Data Integrity** | Pre-compiled Windows Binaries (`.exe`) in Git Repository | Repository Root & Microservices | **RESOLVED** | Medium | [PR #19](https://github.com/HarshitNain/NHIT-Digital-Platform/pull/19) (Untracked 31 binaries) |
 | **SEC-23** | **A09: Logging & Monitoring** | Audit Logging of Authentication & 2FA Events | Gateway / Uvicorn Console | **PASSED** | Low | Timestamped transaction logs |
 | **SEC-24** | **A10: Server-Side Request Forgery** | Outbound HTTP Webhook & Target URL Fuzzing | Gateway Routing Layer | **PASSED** | Low | Gateway performs no dynamic outbound URL fetches |
 
