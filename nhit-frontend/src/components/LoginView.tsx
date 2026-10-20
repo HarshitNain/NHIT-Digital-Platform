@@ -35,8 +35,8 @@ export const LoginView: React.FC<LoginViewProps> = ({
 }) => {
   const [portalMode, setPortalMode] = useState<'admin' | 'user'>(initialPortalMode);
   const [authTab, setAuthTab] = useState<'password' | 'direct_otp'>('password');
-  const [email, setEmail] = useState(initialPortalMode === 'admin' ? 'admin@nhit.com' : 'procurement@nhit.com');
-  const [password, setPassword] = useState('password123');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [enable2FA, setEnable2FA] = useState(true);
 
   // 2FA OTP Challenge States & Password Change
@@ -58,7 +58,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
 
   useEffect(() => {
     setPortalMode(initialPortalMode);
-    setEmail(initialPortalMode === 'admin' ? 'admin@nhit.com' : 'procurement@nhit.com');
   }, [initialPortalMode]);
 
   // OTP Countdown Timer
@@ -70,39 +69,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
     return () => clearInterval(interval);
   }, [loginStep, otpCountdown]);
 
-  // Real Database Seeded Profiles
-  const quickLogins = [
-    {
-      name: 'Super Administrator',
-      email: 'admin@nhit.com',
-      role: 'Super Admin (Full Access: *)',
-      mode: 'admin' as const,
-    },
-    {
-      name: 'Priya Mehta',
-      email: 'cfo@nhit.com',
-      role: 'CFO (Finance Reviewer: notes.approve, payments.process)',
-      mode: 'admin' as const,
-    },
-    {
-      name: 'Rajesh Sharma',
-      email: 'cto@nhit.com',
-      role: 'CTO (Org Admin: users.*, orgs.*)',
-      mode: 'admin' as const,
-    },
-    {
-      name: 'Vikram Malhotra',
-      email: 'procurement@nhit.com',
-      role: 'Project Manager (Procurement)',
-      mode: 'user' as const,
-    },
-    {
-      name: 'Sneha Patel',
-      email: 'engineer@nhit.com',
-      role: 'Site Resident Engineer (Employee)',
-      mode: 'user' as const,
-    },
-  ];
 
   const formatTimer = (sec: number) => {
     const m = Math.floor(sec / 60);
@@ -376,13 +342,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
     setErrorMsg('');
   };
 
-  const selectQuickLogin = (item: typeof quickLogins[0]) => {
-    setEmail(item.email);
-    setPassword('password123');
-    setPortalMode(item.mode);
-    setLoginStep('credentials');
-    setErrorMsg('');
-  };
 
   return (
     <div className="login-screen-wrapper">
@@ -411,12 +370,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
           <button
             type="button"
             className={`portal-tab ${portalMode === 'admin' ? 'active' : ''}`}
-            onClick={() => {
-              setPortalMode('admin');
-              if (email === 'procurement@nhit.com' || email === 'engineer@nhit.com') {
-                setEmail('admin@nhit.com');
-              }
-            }}
+            onClick={() => setPortalMode('admin')}
           >
             <Shield size={16} />
             <div>
@@ -427,12 +381,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
           <button
             type="button"
             className={`portal-tab ${portalMode === 'user' ? 'active' : ''}`}
-            onClick={() => {
-              setPortalMode('user');
-              if (email === 'admin@nhit.com' || email === 'cfo@nhit.com') {
-                setEmail('procurement@nhit.com');
-              }
-            }}
+            onClick={() => setPortalMode('user')}
           >
             <User size={16} />
             <div>
@@ -752,28 +701,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
           </div>
         )}
 
-        {/* Quick Demo Credentials from PostgreSQL */}
-        <div className="quick-access-box">
-          <div className="quick-access-title">
-            <KeyRound size={13} />
-            <span>Seeded PostgreSQL Officer Accounts:</span>
-          </div>
-          <div className="quick-access-grid">
-            {quickLogins.map((item) => (
-              <div
-                key={item.email}
-                className={`quick-pill ${email === item.email && portalMode === item.mode ? 'selected' : ''}`}
-                onClick={() => selectQuickLogin(item)}
-              >
-                <div className="pill-name">{item.name}</div>
-                <div className="pill-meta">
-                  <span className={`pill-tag ${item.mode}`}>{item.mode.toUpperCase()}</span>
-                  <span>{item.email}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
 
         {/* Footer */}
         <div className="login-footer">
