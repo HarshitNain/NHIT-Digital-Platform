@@ -3,6 +3,7 @@ import {
   PaymentNote,
   Project,
   Vendor,
+  VendorAccount,
   User,
   Organization,
   Department,
@@ -191,6 +192,28 @@ export const api = {
   }) => fetchJSON<{ success: boolean }>('/vendors', {
     method: 'POST',
     body: JSON.stringify(vendor),
+  }),
+
+  getVendorAccounts: async (vendorId: string) => {
+    const data = await fetchJSON<{ accounts: VendorAccount[]; total_count?: number }>(`/vendors/${vendorId}/accounts`);
+    return data.accounts || [];
+  },
+
+  createVendorAccount: (vendorId: string, account: {
+    account_name: string;
+    account_number: string;
+    name_of_bank: string;
+    ifsc_code: string;
+    account_type?: string;
+    branch_name?: string;
+    is_primary?: boolean;
+    remarks?: string;
+  }) => fetchJSON<{ success: boolean; account: VendorAccount }>(`/vendors/${vendorId}/accounts`, {
+    method: 'POST',
+    body: JSON.stringify({
+      created_by: '550e8400-e29b-41d4-a716-446655440001',
+      ...account,
+    }),
   }),
 
   // Organizations & Departments

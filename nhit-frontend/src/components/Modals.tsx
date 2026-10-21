@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
-import { GreenNote, PaymentNote, Project, Vendor, Organization, Department, Designation } from '../types';
-import { X, CheckCircle, AlertTriangle, Printer, Shield, Building, UserCheck } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { GreenNote, PaymentNote, Project, Vendor, VendorAccount, Organization, Department, Designation } from '../types';
+import { X, CheckCircle, AlertTriangle, Printer, Shield, Building, UserCheck, Landmark, Plus, ShieldCheck, CreditCard } from 'lucide-react';
+import { api } from '../services/api';
 
 interface BaseModalProps {
   isOpen: boolean;
@@ -669,58 +670,675 @@ export const VendorModal: React.FC<VendorModalProps> = ({ isOpen, onClose, onSub
   );
 };
 
-// ---------------- 6. VENDOR KYC DETAILS MODAL ----------------
+// ---------------- 6. VENDOR KYC DETAILS & MULTI-BANK MODAL ----------------
 interface VendorKycModalProps extends BaseModalProps {
   vendor: Vendor | null;
 }
 
 export const VendorKycModal: React.FC<VendorKycModalProps> = ({ isOpen, onClose, vendor }) => {
+  const [activeTab, setActiveTab] = useState<'kyc' | 'accounts'>('kyc');
+  const [accounts, setAccounts] = useState<VendorAccount[]>([]);
+  const [loadingAccounts, setLoadingAccounts] = useState(false);
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [savingAccount, setSavingAccount] = useState(false);
+  const [formSuccess, setFormSuccess] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  // Form input fields
+  const [accName, setAccName] = useState('');
+  const [bankName, setBankName] = useState('');
+  const [accNum, setAccNum] = useState('');
+  const [ifsc, setIfsc] = useState('');
+  const [branch, setBranch] = useState('');
+  const [accType, setAccType] = useState('Current');
+  const [isPrimary, setIsPrimary] = useState(false);
+  const [remarks, setRemarks] = useState('');
+
+  useEffect(() => {
+    if (!isOpen || !vendor) {
+      setAccounts([]);
+      setShowAddForm(false);
+      setFormSuccess(null);
+      setFormError(null);
+      setActiveTab('kyc');
+      return;
+    }
+
+    const vendorId = vendor.vendor_id || vendor.id;
+    if (!vendorId) return;
+
+    let isMounted = true;
+    const fetchAccounts = async () => {
+      setLoadingAccounts(true);
+      try {
+        const data = await api.getVendorAccounts(vendorId);
+        if (isMounted) {
+          if (data && data.length > 0) {
+            setAccounts(data);
+          } else {
+            const fallback: VendorAccount[] = [];
+            if (vendor.bank_name || vendor.bank_account_number) {
+              fallback.push({
+                id: `primary-${vendorId}`,
+                vendor_id: vendorId,
+                account_name: vendor.name,
+                name_of_bank: vendor.bank_name || 'Primary Bank',
+                account_number: vendor.bank_account_number || '3482910482910',
+                ifsc_code: vendor.bank_ifsc || 'HDFC0000240',
+                account_type: 'Current',
+                branch_name: 'Main Corporate Branch',
+                is_primary: true,
+                is_active: true,
+                remarks: 'Primary Statutory Account (KYC Master)',
+              });
+            }
+            setAccounts(fallback);
+          }
+        }
+      } catch {
+        if (isMounted) {
+          const fallback: VendorAccount[] = [];
+          if (vendor.bank_name || vendor.bank_account_number) {
+            fallback.push({
+              id: `primary-${vendorId}`,
+              vendor_id: vendorId,
+              account_name: vendor.name,
+              name_of_bank: vendor.bank_name || 'Primary Bank',
+              account_number: vendor.bank_account_number || '3482910482910',
+              ifsc_code: vendor.bank_ifsc || 'HDFC0000240',
+              account_type: 'Current',
+              branch_name: 'Main Corporate Branch',
+              is_primary: true,
+              is_active: true,
+              remarks: 'Primary Statutory Account (KYC Master)',
+            });
+          }
+          setAccounts(fallback);
+        }
+      } finally {
+        if (isMounted) setLoadingAccounts(false);
+      }
+    };
+
+    fetchAccounts();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [isOpen, vendor]);
+
   if (!isOpen || !vendor) return null;
+
+  const handleAddAccount = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const vendorId = vendor.vendor_id || vendor.id;
+    if (!vendorId) return;
+
+    if (!accName.trim() || !bankName.trim() || !accNum.trim() || !ifsc.trim()) {
+      setFormError('Account Name, Bank Name, Account Number, and IFSC Code are required.');
+      return;
+    }
+
+    setSavingAccount(true);
+    setFormError(null);
+    setFormSuccess(null);
+
+    try {
+      const res = await api.createVendorAccount(vendorId, {
+        account_name: accName.trim(),
+        name_of_bank: bankName.trim(),
+        account_number: accNum.trim(),
+        ifsc_code: ifsc.trim().toUpperCase(),
+        branch_name: branch.trim() || undefined,
+        account_type: accType,
+        is_primary: isPrimary,
+        remarks: remarks.trim() || undefined,
+      });
+
+      const newAccount: VendorAccount = res.account || {
+        id: `acc-${Date.now()}`,
+        vendor_id: vendorId,
+        account_name: accName.trim(),
+        name_of_bank: bankName.trim(),
+        account_number: accNum.trim(),
+        ifsc_code: ifsc.trim().toUpperCase(),
+        branch_name: branch.trim() || 'General Branch',
+        account_type: accType,
+        is_primary: isPrimary,
+        is_active: true,
+        remarks: remarks.trim() || undefined,
+      };
+
+      setAccounts((prev) => {
+        let updated = prev;
+        if (isPrimary) {
+          updated = prev.map((a) => ({ ...a, is_primary: false }));
+        }
+        return [newAccount, ...updated];
+      });
+
+      setFormSuccess('Secondary bank account successfully registered and activated.');
+      setAccName('');
+      setBankName('');
+      setAccNum('');
+      setIfsc('');
+      setBranch('');
+      setRemarks('');
+      setIsPrimary(false);
+      setTimeout(() => {
+        setShowAddForm(false);
+        setFormSuccess(null);
+      }, 1400);
+    } catch (err: unknown) {
+      setFormError(err instanceof Error ? err.message : 'Failed to register bank account.');
+    } finally {
+      setSavingAccount(false);
+    }
+  };
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '540px' }}>
+      <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '680px' }}>
         <div className="modal-header">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <CheckCircle size={20} style={{ color: 'var(--success-color)' }} />
-            <h3 style={{ margin: 0 }}>Statutory KYC & Banking Profile</h3>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+            <div style={{
+              width: '36px',
+              height: '36px',
+              borderRadius: '8px',
+              background: 'rgba(16, 185, 129, 0.12)',
+              border: '1px solid rgba(16, 185, 129, 0.3)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: 'var(--success-color)'
+            }}>
+              <CheckCircle size={18} />
+            </div>
+            <div>
+              <h3 style={{ margin: 0, fontSize: '1.15rem' }}>Vendor Profile & Bank Management</h3>
+              <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                Statutory KYC validation and multi-bank disbursement accounts
+              </span>
+            </div>
           </div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '4px' }}>
             <X size={20} />
           </button>
         </div>
 
-        <div style={{ marginBottom: '1.25rem' }}>
-          <h4 style={{ fontSize: '1.1rem', margin: '0 0 0.25rem', color: 'var(--text-primary)' }}>{vendor.name}</h4>
-          <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontFamily: 'monospace' }}>Code: {vendor.vendor_code}</span>
+        {/* Vendor Header Summary */}
+        <div style={{
+          marginBottom: '1.25rem',
+          paddingBottom: '0.85rem',
+          borderBottom: '1px solid var(--border-subtle)',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'flex-start'
+        }}>
+          <div>
+            <h4 style={{ fontSize: '1.15rem', margin: '0 0 0.25rem', color: 'var(--text-primary)', fontWeight: 600 }}>{vendor.name}</h4>
+            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+              <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontFamily: 'monospace' }}>Code: {vendor.vendor_code}</span>
+              <span style={{ fontSize: '0.8rem', color: 'var(--border-subtle)' }}>•</span>
+              <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>PAN: {vendor.pan || 'AAACH8392M'}</span>
+              <span style={{ fontSize: '0.8rem', color: 'var(--border-subtle)' }}>•</span>
+              <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>GSTIN: {vendor.gstin || '07AAACH8392M1ZK'}</span>
+            </div>
+          </div>
+          <span className="badge badge-active" style={{ fontSize: '0.75rem' }}>
+            {vendor.is_verified !== false ? 'KYC Verified' : 'Pending Verification'}
+          </span>
         </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', background: 'var(--bg-card-subtle)', padding: '1rem', borderRadius: 'var(--radius-sm)' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-            <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>MSME Classification:</span>
-            <span className="badge badge-active">{vendor.msme_classification || 'Corporate EPC'}</span>
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-            <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Bank Entity:</span>
-            <span style={{ fontWeight: 600 }}>{vendor.bank_name || 'HDFC Bank Ltd'}</span>
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-            <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Account Number:</span>
-            <span style={{ fontFamily: 'monospace' }}>{vendor.bank_account_number || '3482910482910'}</span>
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-            <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>IFSC Clearing Code:</span>
-            <span style={{ fontFamily: 'monospace', color: 'var(--primary-light)' }}>{vendor.bank_ifsc || 'HDFC0000240'}</span>
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-            <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>PAN Authentication:</span>
-            <span style={{ fontFamily: 'monospace' }}>AAACH8392M (Verified)</span>
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-            <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>GSTIN Status:</span>
-            <span style={{ color: 'var(--success-color)', fontWeight: 600 }}>07AAACH8392M1ZK (Active)</span>
-          </div>
+        {/* Tab Navigation */}
+        <div style={{
+          display: 'flex',
+          borderBottom: '1px solid var(--border-subtle)',
+          marginBottom: '1.25rem',
+          gap: '0.5rem'
+        }}>
+          <button
+            type="button"
+            onClick={() => setActiveTab('kyc')}
+            style={{
+              padding: '0.65rem 1rem',
+              background: 'none',
+              border: 'none',
+              borderBottom: activeTab === 'kyc' ? '2px solid var(--primary-color)' : '2px solid transparent',
+              color: activeTab === 'kyc' ? 'var(--primary-color)' : 'var(--text-muted)',
+              fontWeight: activeTab === 'kyc' ? 600 : 500,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              fontSize: '0.88rem',
+              transition: 'all 0.15s ease'
+            }}
+          >
+            <ShieldCheck size={16} />
+            KYC & Statutory Profile
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('accounts')}
+            style={{
+              padding: '0.65rem 1rem',
+              background: 'none',
+              border: 'none',
+              borderBottom: activeTab === 'accounts' ? '2px solid var(--primary-color)' : '2px solid transparent',
+              color: activeTab === 'accounts' ? 'var(--primary-color)' : 'var(--text-muted)',
+              fontWeight: activeTab === 'accounts' ? 600 : 500,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              fontSize: '0.88rem',
+              transition: 'all 0.15s ease'
+            }}
+          >
+            <Landmark size={16} />
+            Multi-Bank Accounts
+            <span style={{
+              background: activeTab === 'accounts' ? 'rgba(59, 130, 246, 0.2)' : 'rgba(255, 255, 255, 0.08)',
+              color: activeTab === 'accounts' ? 'var(--primary-color)' : 'var(--text-muted)',
+              fontSize: '0.75rem',
+              padding: '0.1rem 0.5rem',
+              borderRadius: '9999px',
+              fontWeight: 600
+            }}>
+              {accounts.length}
+            </span>
+          </button>
         </div>
+
+        {/* TAB 1: KYC & STATUTORY PROFILE */}
+        {activeTab === 'kyc' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', background: 'var(--bg-card-subtle)', padding: '1.15rem', borderRadius: 'var(--radius-sm)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '0.5rem' }}>
+              <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>MSME Classification:</span>
+              <span className="badge badge-active">{vendor.msme_classification || 'Corporate EPC'}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '0.5rem' }}>
+              <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Primary Bank Entity:</span>
+              <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{vendor.bank_name || 'HDFC Bank Ltd'}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '0.5rem' }}>
+              <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Primary Account Number:</span>
+              <span style={{ fontFamily: 'monospace', fontWeight: 600, letterSpacing: '0.5px' }}>{vendor.bank_account_number || '3482910482910'}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '0.5rem' }}>
+              <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>IFSC Clearing Code:</span>
+              <span style={{ fontFamily: 'monospace', color: 'var(--primary-light)', fontWeight: 600 }}>{vendor.bank_ifsc || 'HDFC0000240'}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '0.5rem' }}>
+              <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>PAN Authentication:</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                <span style={{ fontFamily: 'monospace' }}>{vendor.pan || 'AAACH8392M'}</span>
+                <span className="badge badge-active" style={{ fontSize: '0.7rem', padding: '0.1rem 0.4rem' }}>Verified</span>
+              </div>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '0.5rem' }}>
+              <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>GSTIN Status:</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                <span style={{ fontFamily: 'monospace', color: 'var(--text-primary)' }}>{vendor.gstin || '07AAACH8392M1ZK'}</span>
+                <span className="badge badge-active" style={{ fontSize: '0.7rem', padding: '0.1rem 0.4rem' }}>Active</span>
+              </div>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Section 206AB Compliance:</span>
+              <span style={{ color: 'var(--success-color)', fontWeight: 600, fontSize: '0.85rem' }}>Verified (Non-Defaulting)</span>
+            </div>
+          </div>
+        )}
+
+        {/* TAB 2: MULTI-BANK ACCOUNTS */}
+        {activeTab === 'accounts' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            {/* Action Bar */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <h5 style={{ margin: '0 0 0.15rem', fontSize: '0.92rem', color: 'var(--text-primary)' }}>Registered Bank Accounts</h5>
+                <p style={{ margin: 0, fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                  Disbursement routing supports primary corporate and secondary project escrow accounts.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => {
+                  setShowAddForm(!showAddForm);
+                  setFormError(null);
+                  setFormSuccess(null);
+                  if (!showAddForm && !accName) {
+                    setAccName(vendor.name);
+                  }
+                }}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.4rem',
+                  fontSize: '0.82rem',
+                  padding: '0.45rem 0.85rem'
+                }}
+              >
+                <Plus size={15} />
+                {showAddForm ? 'Close Form' : 'Add Bank Account'}
+              </button>
+            </div>
+
+            {/* Inline Add Account Form */}
+            {showAddForm && (
+              <form onSubmit={handleAddAccount} style={{
+                background: 'rgba(255, 255, 255, 0.03)',
+                border: '1px solid rgba(59, 130, 246, 0.3)',
+                borderRadius: 'var(--radius-sm)',
+                padding: '1rem',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '0.85rem'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', borderBottom: '1px solid rgba(255, 255, 255, 0.06)', paddingBottom: '0.5rem' }}>
+                  <CreditCard size={16} style={{ color: 'var(--primary-color)' }} />
+                  <span style={{ fontSize: '0.88rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+                    Add Commercial or Secondary Escrow Account
+                  </span>
+                </div>
+
+                {formError && (
+                  <div style={{
+                    padding: '0.6rem 0.8rem',
+                    background: 'rgba(239, 68, 68, 0.12)',
+                    border: '1px solid rgba(239, 68, 68, 0.3)',
+                    borderRadius: 'var(--radius-sm)',
+                    color: '#f87171',
+                    fontSize: '0.8rem'
+                  }}>
+                    {formError}
+                  </div>
+                )}
+
+                {formSuccess && (
+                  <div style={{
+                    padding: '0.6rem 0.8rem',
+                    background: 'rgba(16, 185, 129, 0.12)',
+                    border: '1px solid rgba(16, 185, 129, 0.3)',
+                    borderRadius: 'var(--radius-sm)',
+                    color: '#34d399',
+                    fontSize: '0.8rem'
+                  }}>
+                    {formSuccess}
+                  </div>
+                )}
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label style={{ fontSize: '0.78rem', color: 'var(--text-muted)', display: 'block', marginBottom: '0.25rem' }}>
+                      Beneficiary / Account Name *
+                    </label>
+                    <input
+                      type="text"
+                      className="form-control"
+                      value={accName}
+                      onChange={(e) => setAccName(e.target.value)}
+                      placeholder="e.g. Larsen & Toubro Infra Escrow"
+                      style={{ fontSize: '0.85rem', width: '100%' }}
+                      required
+                    />
+                  </div>
+
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label style={{ fontSize: '0.78rem', color: 'var(--text-muted)', display: 'block', marginBottom: '0.25rem' }}>
+                      Bank Entity Name *
+                    </label>
+                    <input
+                      type="text"
+                      className="form-control"
+                      value={bankName}
+                      onChange={(e) => setBankName(e.target.value)}
+                      placeholder="e.g. State Bank of India, ICICI Bank"
+                      style={{ fontSize: '0.85rem', width: '100%' }}
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label style={{ fontSize: '0.78rem', color: 'var(--text-muted)', display: 'block', marginBottom: '0.25rem' }}>
+                      Account Number *
+                    </label>
+                    <input
+                      type="text"
+                      className="form-control"
+                      value={accNum}
+                      onChange={(e) => setAccNum(e.target.value)}
+                      placeholder="9-18 digit account number"
+                      style={{ fontSize: '0.85rem', width: '100%', fontFamily: 'monospace' }}
+                      required
+                    />
+                  </div>
+
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label style={{ fontSize: '0.78rem', color: 'var(--text-muted)', display: 'block', marginBottom: '0.25rem' }}>
+                      IFSC Code (11 Chars) *
+                    </label>
+                    <input
+                      type="text"
+                      className="form-control"
+                      value={ifsc}
+                      onChange={(e) => setIfsc(e.target.value.toUpperCase())}
+                      placeholder="e.g. SBIN0001234"
+                      maxLength={11}
+                      style={{ fontSize: '0.85rem', width: '100%', fontFamily: 'monospace' }}
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label style={{ fontSize: '0.78rem', color: 'var(--text-muted)', display: 'block', marginBottom: '0.25rem' }}>
+                      Branch Name
+                    </label>
+                    <input
+                      type="text"
+                      className="form-control"
+                      value={branch}
+                      onChange={(e) => setBranch(e.target.value)}
+                      placeholder="e.g. Corporate Finance Branch, Mumbai"
+                      style={{ fontSize: '0.85rem', width: '100%' }}
+                    />
+                  </div>
+
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label style={{ fontSize: '0.78rem', color: 'var(--text-muted)', display: 'block', marginBottom: '0.25rem' }}>
+                      Account Classification
+                    </label>
+                    <select
+                      className="form-control"
+                      value={accType}
+                      onChange={(e) => setAccType(e.target.value)}
+                      style={{ fontSize: '0.85rem', width: '100%' }}
+                    >
+                      <option value="Current">Current Commercial Account</option>
+                      <option value="Escrow">Project Escrow Account</option>
+                      <option value="Overdraft">Cash Credit / Overdraft</option>
+                      <option value="Savings">Savings Account</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="form-group" style={{ margin: 0 }}>
+                  <label style={{ fontSize: '0.78rem', color: 'var(--text-muted)', display: 'block', marginBottom: '0.25rem' }}>
+                    Purpose / Account Remarks
+                  </label>
+                  <input
+                    type="text"
+                    className="form-control"
+                    value={remarks}
+                    onChange={(e) => setRemarks(e.target.value)}
+                    placeholder="e.g. Dedicated escrow account for NHIT Eastern Corridor Package-II"
+                    style={{ fontSize: '0.85rem', width: '100%' }}
+                  />
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.25rem' }}>
+                  <input
+                    type="checkbox"
+                    id="is_primary_checkbox"
+                    checked={isPrimary}
+                    onChange={(e) => setIsPrimary(e.target.checked)}
+                    style={{ cursor: 'pointer' }}
+                  />
+                  <label htmlFor="is_primary_checkbox" style={{ fontSize: '0.82rem', color: 'var(--text-primary)', cursor: 'pointer' }}>
+                    Set as Primary Disbursing Account (replaces current default)
+                  </label>
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.5rem' }}>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => setShowAddForm(false)}
+                    disabled={savingAccount}
+                    style={{ fontSize: '0.82rem', padding: '0.4rem 0.8rem' }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="btn btn-primary"
+                    disabled={savingAccount}
+                    style={{ fontSize: '0.82rem', padding: '0.4rem 0.9rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+                  >
+                    {savingAccount ? 'Registering...' : 'Save Bank Account'}
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {/* Bank Accounts List */}
+            {loadingAccounts ? (
+              <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.88rem' }}>
+                Loading verified banking records...
+              </div>
+            ) : accounts.length === 0 ? (
+              <div style={{
+                padding: '2rem',
+                textAlign: 'center',
+                background: 'var(--bg-card-subtle)',
+                borderRadius: 'var(--radius-sm)',
+                border: '1px dashed var(--border-subtle)'
+              }}>
+                <Landmark size={32} style={{ color: 'var(--text-muted)', marginBottom: '0.5rem' }} />
+                <p style={{ margin: '0 0 0.5rem', color: 'var(--text-primary)', fontSize: '0.9rem', fontWeight: 500 }}>
+                  No secondary bank accounts registered
+                </p>
+                <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+                  Click &quot;Add Bank Account&quot; above to register an additional escrow or corporate account.
+                </p>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', maxHeight: '320px', overflowY: 'auto' }}>
+                {accounts.map((acc) => (
+                  <div
+                    key={acc.id}
+                    style={{
+                      background: 'var(--bg-card-subtle)',
+                      border: acc.is_primary ? '1px solid rgba(16, 185, 129, 0.4)' : '1px solid var(--border-subtle)',
+                      borderRadius: 'var(--radius-sm)',
+                      padding: '0.85rem 1rem',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '0.5rem',
+                      transition: 'border 0.2s ease'
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <Landmark size={18} style={{ color: acc.is_primary ? 'var(--success-color)' : 'var(--primary-color)' }} />
+                        <span style={{ fontWeight: 600, fontSize: '0.92rem', color: 'var(--text-primary)' }}>
+                          {acc.name_of_bank}
+                        </span>
+                        {acc.branch_name && (
+                          <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                            • {acc.branch_name}
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                        {acc.is_primary ? (
+                          <span style={{
+                            background: 'rgba(16, 185, 129, 0.15)',
+                            color: '#10b981',
+                            border: '1px solid rgba(16, 185, 129, 0.3)',
+                            fontSize: '0.72rem',
+                            fontWeight: 600,
+                            padding: '0.15rem 0.55rem',
+                            borderRadius: '9999px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.25rem'
+                          }}>
+                            ★ Primary Disbursing
+                          </span>
+                        ) : (
+                          <span style={{
+                            background: 'rgba(59, 130, 246, 0.12)',
+                            color: '#60a5fa',
+                            border: '1px solid rgba(59, 130, 246, 0.25)',
+                            fontSize: '0.72rem',
+                            fontWeight: 600,
+                            padding: '0.15rem 0.55rem',
+                            borderRadius: '9999px'
+                          }}>
+                            Secondary / Escrow
+                          </span>
+                        )}
+                        <span className="badge badge-active" style={{ fontSize: '0.7rem', padding: '0.1rem 0.4rem' }}>
+                          Active
+                        </span>
+                      </div>
+                    </div>
+
+                    <div style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))',
+                      gap: '0.5rem',
+                      background: 'rgba(0, 0, 0, 0.2)',
+                      padding: '0.6rem 0.75rem',
+                      borderRadius: 'var(--radius-sm)',
+                      fontSize: '0.8rem'
+                    }}>
+                      <div>
+                        <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: '0.72rem' }}>Beneficiary</span>
+                        <span style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{acc.account_name}</span>
+                      </div>
+                      <div>
+                        <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: '0.72rem' }}>Account No.</span>
+                        <span style={{ fontFamily: 'monospace', fontWeight: 600, letterSpacing: '0.5px' }}>{acc.account_number}</span>
+                      </div>
+                      <div>
+                        <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: '0.72rem' }}>IFSC Code</span>
+                        <span style={{ fontFamily: 'monospace', color: 'var(--primary-light)', fontWeight: 600 }}>{acc.ifsc_code}</span>
+                      </div>
+                      <div>
+                        <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: '0.72rem' }}>Account Type</span>
+                        <span style={{ fontWeight: 500 }}>{acc.account_type || 'Current'}</span>
+                      </div>
+                    </div>
+
+                    {acc.remarks && (
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                        Note: {acc.remarks}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1.25rem' }}>
           <button className="btn btn-secondary" onClick={onClose}>

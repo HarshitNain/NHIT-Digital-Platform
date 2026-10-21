@@ -48,6 +48,7 @@ export interface Project {
 }
 
 export interface Vendor {
+  id?: string;
   vendor_id: string;
   vendor_code: string;
   name: string;
@@ -58,6 +59,21 @@ export interface Vendor {
   gstin?: string;
   pan?: string;
   is_verified?: boolean;
+}
+
+export interface VendorAccount {
+  id: string;
+  vendor_id: string;
+  account_name: string;
+  account_number: string;
+  account_type?: string;
+  name_of_bank: string;
+  branch_name?: string;
+  ifsc_code: string;
+  swift_code?: string;
+  is_primary?: boolean;
+  is_active?: boolean;
+  remarks?: string;
 }
 
 export interface User {

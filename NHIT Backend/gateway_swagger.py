@@ -808,7 +808,8 @@ class CreateVendorAccountRequest(BaseModel):
     branch_name: Optional[str] = None
     swift_code: Optional[str] = None
     remarks: Optional[str] = None
-    created_by: str = Field(..., description="Creator UUID")
+    is_active: bool = Field(True, description="Active status")
+    created_by: Optional[str] = Field("550e8400-e29b-41d4-a716-446655440001", description="Creator UUID")
 
 class GenerateVendorCodeRequest(BaseModel):
     vendor_name: str = Field(..., description="Vendor name for code generation")
@@ -2245,21 +2246,89 @@ async def regenerate_vendor_code(vendor_id: str):
 @app.post("/api/v1/vendors/{vendor_id}/accounts", tags=["🤝 Vendor Service — Accounts"], summary="Create Vendor Account",
           description="Adds a new bank account to a vendor. Multiple accounts are supported. One can be marked as primary.")
 async def create_vendor_account(vendor_id: str, body: CreateVendorAccountRequest):
-    return {"account": {"id": "generated-uuid", "vendor_id": vendor_id, "account_name": body.account_name}}
+    vendor_id = validate_uuid(vendor_id, "vendor_id")
+    account_id = str(uuid.uuid4())
+    creator_id = body.created_by or "550e8400-e29b-41d4-a716-446655440001"
+
+    try:
+        if body.is_primary:
+            execute_db("UPDATE vendor_accounts SET is_primary = false WHERE vendor_id = %s", (vendor_id,))
+
+        execute_db("""
+            INSERT INTO vendor_accounts (
+                id, vendor_id, account_name, account_number, account_type,
+                name_of_bank, branch_name, ifsc_code, swift_code,
+                is_primary, is_active, remarks, created_by
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (
+            account_id, vendor_id, body.account_name, body.account_number,
+            body.account_type or "Current", body.name_of_bank, body.branch_name or "",
+            body.ifsc_code, body.swift_code or "", body.is_primary,
+            body.is_active, body.remarks or "", creator_id
+        ))
+
+        created_account = {
+            "id": account_id,
+            "vendor_id": vendor_id,
+            "account_name": body.account_name,
+            "account_number": body.account_number,
+            "account_type": body.account_type or "Current",
+            "name_of_bank": body.name_of_bank,
+            "branch_name": body.branch_name or "",
+            "ifsc_code": body.ifsc_code,
+            "swift_code": body.swift_code or "",
+            "is_primary": body.is_primary,
+            "is_active": body.is_active,
+            "remarks": body.remarks or ""
+        }
+        return {"success": True, "account": created_account, "message": "Vendor bank account added successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Failed to create vendor account: {str(e)}")
 
 
 @app.get("/api/v1/vendors/{vendor_id}/accounts", tags=["🤝 Vendor Service — Accounts"], summary="Get Vendor Accounts",
          description="Lists all bank accounts for a vendor including primary/secondary status.")
 async def get_vendor_accounts(vendor_id: str = Path(..., description="Vendor UUID")):
+    vendor_id = validate_uuid(vendor_id, "vendor_id")
     try:
         accounts = query_db("""
             SELECT id, vendor_id, account_name, account_number, account_type, 
-                   name_of_bank, branch_name, ifsc_code, is_primary, is_active 
-            FROM vendor_accounts WHERE vendor_id = %s ORDER BY is_primary DESC
+                   name_of_bank, branch_name, ifsc_code, swift_code, is_primary, is_active, remarks, created_at 
+            FROM vendor_accounts WHERE vendor_id = %s ORDER BY is_primary DESC, created_at ASC
         """, (vendor_id,))
+
+        if not accounts:
+            v_rows = query_db("""
+                SELECT id, vendor_name, beneficiary_name, account_name, account_number, 
+                       name_of_bank, ifsc_code, from_account_type
+                FROM vendors WHERE id = %s
+            """, (vendor_id,))
+            if v_rows:
+                v = v_rows[0]
+                if v.get("account_number") or v.get("name_of_bank"):
+                    accounts = [{
+                        "id": f"primary-{v['id']}",
+                        "vendor_id": str(v["id"]),
+                        "account_name": v.get("account_name") or v.get("beneficiary_name") or v.get("vendor_name") or "Primary Commercial Account",
+                        "account_number": v.get("account_number") or "N/A",
+                        "account_type": v.get("from_account_type") or "Current",
+                        "name_of_bank": v.get("name_of_bank") or "Primary Bank",
+                        "branch_name": "Main Corporate Branch",
+                        "ifsc_code": v.get("ifsc_code") or "N/A",
+                        "swift_code": None,
+                        "is_primary": True,
+                        "is_active": True,
+                        "remarks": "Primary Statutory Account (from KYC Master)",
+                        "created_at": None,
+                    }]
         return {"accounts": accounts, "total_count": len(accounts)}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(500, str(e))
+
 
 
 @app.get("/api/v1/vendors/{vendor_id}/banking-details", tags=["🤝 Vendor Service — Accounts"], summary="Get Vendor Banking Details",
