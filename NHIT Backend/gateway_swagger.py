@@ -172,7 +172,7 @@ class DistributedOTPStore:
         redis_url = os.environ.get("REDIS_URL", "").strip()
         if redis_url:
             try:
-                import redis
+                import redis  # type: ignore
                 self._redis = redis.from_url(redis_url, decode_responses=True)
                 print(f"[CACHE] Connected to distributed Redis OTP cache: {redis_url}")
             except Exception as e:
