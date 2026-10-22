@@ -91,7 +91,7 @@ jobs:
 
           if [ -d "Nhit-Note" ]; then
             echo ">>> Building Nhit-Note module services..."
-            if ! (cd "Nhit-Note" && go build ./...); then
+            if ! (cd "Nhit-Note" && go build ./services/...); then
               echo "❌ Build failed for Nhit-Note"
               FAILED=1
             fi
