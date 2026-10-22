@@ -18,6 +18,7 @@ jobs:
   frontend-build:
     name: Frontend Typecheck & Build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: nhit-frontend
@@ -33,24 +34,25 @@ jobs:
           cache: 'npm'
           cache-dependency-path: nhit-frontend/package-lock.json
 
-      - name: Install Dependencies
-        run: npm install
+      - name: Clean Deterministic Dependency Install
+        run: npm ci
 
-      - name: Run TypeScript Typecheck (tsc -b)
+      - name: Run TypeScript Strict Typecheck (tsc -b)
         run: npx tsc -b
 
       - name: Build Production SPA Bundle
         run: npm run build
 
       - name: Verify Dist Artifacts
-        run: test -f dist/index.html && echo "Frontend build succeeded!"
+        run: test -f dist/index.html && echo "Frontend build verified successfully!"
 
   # ----------------------------------------------------------------------------
-  # 2. GO MICROSERVICES: Syntax, Dependencies & Compilation Check
+  # 2. GO MICROSERVICES: Strict Module-Aware Compilation
   # ----------------------------------------------------------------------------
   go-microservices:
     name: Go Microservices Compilation
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
       - name: Checkout Code
@@ -62,9 +64,11 @@ jobs:
           go-version: '1.24'
           check-latest: false
 
-      - name: Verify Go Microservices Build
+      - name: Verify Go Microservices Build (Zero Silent Failures)
         run: |
+          set -e
           echo "Compiling all Go microservices..."
+          FAILED=0
           services=(
             "NHIT Backend/services/auth-service"
             "NHIT Backend/services/user-service"
@@ -74,24 +78,38 @@ jobs:
             "NHIT Backend/services/project-service"
             "NHIT Backend/services/vendor-service"
             "NHIT Backend/services/api-gateway"
-            "Nhit-Note/services/greennote-service"
-            "Nhit-Note/services/paymentnote-service"
-            "Nhit-Note/services/potracking-service"
           )
           for svc in "${services[@]}"; do
             if [ -d "$svc" ]; then
               echo ">>> Building $svc..."
-              (cd "$svc" && go build ./... || true)
+              if ! (cd "$svc" && go build ./...); then
+                echo "❌ Build failed for $svc"
+                FAILED=1
+              fi
             fi
           done
-          echo "Go microservices verified."
+
+          if [ -d "Nhit-Note" ]; then
+            echo ">>> Building Nhit-Note module services..."
+            if ! (cd "Nhit-Note" && go build ./...); then
+              echo "❌ Build failed for Nhit-Note"
+              FAILED=1
+            fi
+          fi
+
+          if [ $FAILED -ne 0 ]; then
+            echo "FATAL: One or more Go microservices failed compilation!"
+            exit 1
+          fi
+          echo "All Go microservices compiled successfully!"
 
   # ----------------------------------------------------------------------------
-  # 3. BACKEND & INTEGRATION TEST SUITE: 18 API Routes & 2FA Flows
+  # 3. BACKEND & INTEGRATION TEST SUITE (Postgres 15 + Redis 7 + 117 Invariants)
   # ----------------------------------------------------------------------------
   backend-integration-tests:
-    name: Full API & 2FA Test Suite (18 Routes)
+    name: Full API, 2FA & Platform Invariant Suite
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     services:
       postgres:
@@ -104,6 +122,16 @@ jobs:
           - 5432:5432
         options: >-
           --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 5
@@ -123,6 +151,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r "NHIT Backend/requirements.txt"
 
+      - name: Verify Python Syntax Across Workspace
+        run: |
+          python -m py_compile "NHIT Backend/gateway_swagger.py"
+          python -m py_compile "NHIT Backend/scripts/harness.py"
+          python -m py_compile "tests/run_ci_backend.py"
+          python -m py_compile "tests/test_full_suite.py"
+
       - name: Migrate & Seed Test Database
         env:
           DB_HOST: 127.0.0.1
@@ -130,16 +165,18 @@ jobs:
           DB_NAME: nhit_db
           DB_USER: postgres
           DB_PASSWORD: password
+          REDIS_URL: redis://127.0.0.1:6379/0
         run: |
           python "NHIT Backend/scripts/setup_test_db.py"
 
-      - name: Execute Full Platform Invariant Harness (116+ Checks)
+      - name: Execute Full Platform Invariant Harness (117+ Checks)
         env:
           DB_HOST: 127.0.0.1
           DB_PORT: 5432
           DB_NAME: nhit_db
           DB_USER: postgres
           DB_PASSWORD: password
+          REDIS_URL: redis://127.0.0.1:6379/0
           ENVIRONMENT: test
         run: |
           python "NHIT Backend/scripts/harness.py" --fast
@@ -151,6 +188,7 @@ jobs:
           DB_NAME: nhit_db
           DB_USER: postgres
           DB_PASSWORD: password
+          REDIS_URL: redis://127.0.0.1:6379/0
           PORT: 8080
           ENVIRONMENT: test
           API_BASE_URL: http://127.0.0.1:8080/api/v1
@@ -176,4 +214,5 @@ jobs:
         with:
           name: backend-test-log
           path: ci_backend.log
+          retention-days: 7
           if-no-files-found: ignore
