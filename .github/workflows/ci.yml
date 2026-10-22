@@ -1,10 +1,15 @@
 name: NHIT Enterprise CI/CD Pipeline
 
-on:
+'on':
   push:
     branches: [ main, master ]
   pull_request:
     branches: [ main, master ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   # ----------------------------------------------------------------------------
@@ -127,6 +132,17 @@ jobs:
           DB_PASSWORD: password
         run: |
           python "NHIT Backend/scripts/setup_test_db.py"
+
+      - name: Execute Full Platform Invariant Harness (116+ Checks)
+        env:
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_NAME: nhit_db
+          DB_USER: postgres
+          DB_PASSWORD: password
+          ENVIRONMENT: test
+        run: |
+          python "NHIT Backend/scripts/harness.py" --fast
 
       - name: Launch Gateway & Execute Full Integration Test Suite
         env:
