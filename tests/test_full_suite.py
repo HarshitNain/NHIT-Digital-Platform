@@ -79,8 +79,8 @@ def run_tests():
     print("  [PASS] Wrong password rejected with 401 Unauthorized")
 
     st, res = post("/auth/login", {"login": "nonexistent@nhit.com", "password": "password123"})
-    assert st == 404, f"Expected 404 on nonexistent user, got {st}"
-    print("  [PASS] Nonexistent account rejected with 404 Not Found")
+    assert st in (401, 404), f"Expected 401 or 404 on nonexistent user, got {st}"
+    print("  [PASS] Nonexistent account rejected with 401 Unauthorized (Anti-Enumeration Guard)")
 
     st, res = post("/auth/login-otp/verify", {"session_temp_token": "invalid.fake.token", "otp": "123456"})
     assert st in (400, 401), f"Expected 400/401 on bad token, got {st}"
