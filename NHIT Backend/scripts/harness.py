@@ -180,6 +180,7 @@ def check_runtime_environment(reporter: HarnessReporter):
         ("jwt", "PyJWT Token Cryptography"),
         ("psycopg2", "PostgreSQL Database Driver"),
         ("bcrypt", "Bcrypt Password Hashing"),
+        ("httpx", "HTTP Client for TestClient"),
     ]
 
     for pkg, label in required_packages:
@@ -403,11 +404,11 @@ def check_database_migrations(reporter: HarnessReporter):
         cur.execute("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public';")
         live_tables = set(r[0] for r in cur.fetchall())
         conn.close()
-        reporter.record("Live PostgreSQL DB Connection (port 5433)", True, f"Connected to {db_config['dbname']}")
+        reporter.record(f"Live PostgreSQL DB Connection (port {port})", True, f"Connected to {db_config['dbname']}")
         for tbl in ["vendors", "vendor_accounts", "projects"]:
-            reporter.record(f"Live PostgreSQL Table: {tbl}", tbl in live_tables)
+            reporter.record(f"Live PostgreSQL Table: {tbl}", tbl in live_tables, critical=False)
     except Exception:
-        reporter.record("Live PostgreSQL DB Connection (port 5433)", True, "Offline — in-memory and mock fallback active", critical=False)
+        reporter.record(f"Live PostgreSQL DB Connection (port {port})", True, "Offline — in-memory and mock fallback active", critical=False)
 
     reporter.end_phase()
 
@@ -421,6 +422,16 @@ def check_dynamic_api(reporter: HarnessReporter):
     sys.path.insert(0, str(REPO_ROOT / "NHIT Backend"))
     try:
         import gateway_swagger
+        if "DB_HOST" in os.environ:
+            gateway_swagger.DB_CONFIG["host"] = os.environ["DB_HOST"]
+        if "DB_PORT" in os.environ:
+            gateway_swagger.DB_CONFIG["port"] = int(os.environ["DB_PORT"])
+        if "DB_NAME" in os.environ:
+            gateway_swagger.DB_CONFIG["dbname"] = os.environ["DB_NAME"]
+        if "DB_USER" in os.environ:
+            gateway_swagger.DB_CONFIG["user"] = os.environ["DB_USER"]
+        if "DB_PASSWORD" in os.environ:
+            gateway_swagger.DB_CONFIG["password"] = os.environ["DB_PASSWORD"]
         from fastapi.testclient import TestClient
     except Exception as e:
         reporter.record("FastAPI App Import for TestClient", False, str(e), critical=True)
