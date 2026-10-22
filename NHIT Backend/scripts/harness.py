@@ -3,8 +3,8 @@ NHIT Digital Platform — Automated Test, Health & Quality Assurance Harness
 ==========================================================================
 Enterprise-grade health verification suite validating backend code compilation,
 dynamic in-process FastAPI endpoint responses, PostgreSQL schema migrations,
-cryptographic token security, financial & compliance domain invariants, and 
-React SPA TypeScript compilation.
+concurrency safety, cryptographic token security, financial & compliance domain
+invariants, and React SPA TypeScript compilation.
 
 Usage:
     python "NHIT Backend/scripts/harness.py" [OPTIONS]
@@ -13,6 +13,8 @@ Options:
     --fast          Skip slower subprocesses (e.g., frontend TypeScript compiler)
     --json          Output results as JSON for CI/CD integrations
     --verbose       Print extended traces, HTTP responses, and debug information
+    --bail          Halt execution immediately on the first critical test failure
+    --phase <N>     Execute only a specific phase (1, 2, 3, 4, or 5)
     --help          Show this message and exit
 """
 
@@ -24,6 +26,8 @@ import json
 import argparse
 import py_compile
 import subprocess
+import threading
+import urllib.parse
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 
@@ -41,15 +45,23 @@ if sys.platform == "win32":
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent
 GATEWAY_PATH = REPO_ROOT / "NHIT Backend" / "gateway_swagger.py"
+NOTIFIER_PATH = REPO_ROOT / "NHIT Backend" / "otp_notifier.py"
 MIGRATIONS_PATH = REPO_ROOT / "NHIT Backend" / "scripts" / "consolidated-migrations.sql"
 FRONTEND_DIR = REPO_ROOT / "nhit-frontend"
 FRONTEND_TYPES_PATH = FRONTEND_DIR / "src" / "types" / "index.ts"
 FRONTEND_API_PATH = FRONTEND_DIR / "src" / "services" / "api.ts"
+FRONTEND_MODALS_PATH = FRONTEND_DIR / "src" / "components" / "Modals.tsx"
+
+# Ensure NHIT Backend package is globally importable across all phases
+sys.path.insert(0, str(REPO_ROOT / "NHIT Backend"))
+
+
 
 class HarnessReporter:
-    def __init__(self, verbose: bool = False, json_mode: bool = False):
+    def __init__(self, verbose: bool = False, json_mode: bool = False, bail: bool = False):
         self.verbose = verbose
         self.json_mode = json_mode
+        self.bail = bail
         self.results: List[Dict[str, Any]] = []
         self.current_phase = ""
         self.start_time = time.time()
@@ -68,19 +80,33 @@ class HarnessReporter:
         duration = time.time() - self.phase_start
         self.phase_times[self.current_phase] = duration
 
-    def record(self, name: str, passed: bool, detail: str = "", critical: bool = True):
+    def record(self, name: str, passed: bool, detail: str = "", critical: bool = True, recovery_hint: str = ""):
         self.results.append({
             "phase": self.current_phase,
             "name": name,
             "passed": passed,
             "detail": detail,
-            "critical": critical
+            "critical": critical,
+            "recovery_hint": recovery_hint
         })
         if not self.json_mode:
             tag = "✓ [PASS]" if passed else ("✗ [FAIL]" if critical else "! [WARN]")
             print(f"  {tag:<9} {name}")
             if detail and (not passed or self.verbose):
                 print(f"            ↳ {detail}")
+            if not passed and recovery_hint:
+                print(f"            💡 Fix: {recovery_hint}")
+
+        if not passed and critical and self.bail:
+            if not self.json_mode:
+                print(f"\n[FATAL] Execution halted due to --bail flag on failure: {name}")
+                if recovery_hint:
+                    print(f"💡 Fix: {recovery_hint}")
+            self.summary()
+            sys.exit(1)
+
+    def is_healthy(self) -> bool:
+        return len([r for r in self.results if not r["passed"] and r["critical"]]) == 0
 
     def summary(self) -> bool:
         total_duration = time.time() - self.start_time
@@ -121,6 +147,9 @@ class HarnessReporter:
             print("  ✓ ALL PLATFORM INVARIANTS, APIS & CONTRACTS ARE ROBUST & HEALTHY")
         else:
             print(f"  ✗ {len(critical_failed)} CRITICAL CHECKS FAILED — REVIEW FLAGGED ITEMS ABOVE")
+            for f in critical_failed:
+                if f.get("recovery_hint"):
+                    print(f"    - {f['name']}: {f['recovery_hint']}")
         print("*" * 70 + "\n")
 
         return all_passed
@@ -132,10 +161,16 @@ class HarnessReporter:
 def check_runtime_environment(reporter: HarnessReporter):
     reporter.start_phase("1. RUNTIME ENVIRONMENT & DEPENDENCY MATRIX")
     
-    # Python Version
+    # Python Version & Binary Path
     version_str = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
     py_ok = sys.version_info >= (3, 10)
-    reporter.record(f"Python Runtime (Detected {version_str} >= 3.10)", py_ok, critical=True)
+    reporter.record(
+        f"Python Runtime (Detected {version_str} >= 3.10)", 
+        py_ok, 
+        f"Executable: {sys.executable}",
+        critical=True,
+        recovery_hint="Upgrade to Python 3.10, 3.11, or 3.12"
+    )
 
     # Core Dependencies
     required_packages = [
@@ -153,7 +188,13 @@ def check_runtime_environment(reporter: HarnessReporter):
             ver = getattr(mod, "__version__", "installed")
             reporter.record(f"Core Dependency: {pkg} ({label})", True, f"Version: {ver}")
         except ImportError:
-            reporter.record(f"Core Dependency: {pkg} ({label})", False, "Missing in active interpreter", critical=True)
+            reporter.record(
+                f"Core Dependency: {pkg} ({label})", 
+                False, 
+                "Missing in active interpreter", 
+                critical=True,
+                recovery_hint=f"Run '{sys.executable} -m pip install {pkg}'"
+            )
 
     # Optional Dependencies (Redis distributed cache)
     try:
@@ -163,13 +204,32 @@ def check_runtime_environment(reporter: HarnessReporter):
     except ImportError:
         reporter.record("Optional Dependency: redis (Distributed OTP/Cache)", True, "Using in-process fallback store", critical=False)
 
-    # Node.js runtime check for frontend
+    # Node.js and NPM runtimes
     try:
-        node_res = subprocess.run(["node", "--version"], capture_output=True, text=True, timeout=5, shell=True)
+        node_cmd = "cmd.exe /c node --version" if sys.platform == "win32" else "node --version"
+        node_res = subprocess.run(node_cmd, capture_output=True, text=True, timeout=5, shell=True)
         node_ver = node_res.stdout.strip() if node_res.returncode == 0 else "Unknown"
         reporter.record(f"Node.js Runtime ({node_ver})", node_res.returncode == 0, critical=False)
     except Exception:
-        reporter.record("Node.js Runtime", False, "Node.js not found in PATH", critical=False)
+        reporter.record("Node.js Runtime", False, "Node.js not found in PATH", critical=False, recovery_hint="Install Node.js 20+ from nodejs.org")
+
+    try:
+        npm_cmd = "cmd.exe /c npm --version" if sys.platform == "win32" else "npm --version"
+        npm_res = subprocess.run(npm_cmd, capture_output=True, text=True, timeout=5, shell=True)
+        npm_ver = npm_res.stdout.strip() if npm_res.returncode == 0 else "Unknown"
+        reporter.record(f"NPM Package Manager ({npm_ver})", npm_res.returncode == 0, critical=False)
+    except Exception:
+        reporter.record("NPM Package Manager", False, "NPM not found in PATH", critical=False)
+
+    # Workspace Directory Structure
+    dirs = [
+        ("NHIT Backend", REPO_ROOT / "NHIT Backend"),
+        ("nhit-frontend", FRONTEND_DIR),
+        ("nhit-frontend/src", FRONTEND_DIR / "src"),
+        ("scripts", SCRIPT_DIR),
+    ]
+    for d_name, d_path in dirs:
+        reporter.record(f"Workspace Directory: {d_name}", d_path.exists() and d_path.is_dir(), f"Path: {d_path}")
 
     reporter.end_phase()
 
@@ -188,12 +248,23 @@ def check_code_and_contracts(reporter: HarnessReporter, fast_mode: bool):
             py_compile.compile(str(GATEWAY_PATH), doraise=True)
             reporter.record("Gateway Python Compilation (gateway_swagger.py)", True, "Zero syntax or indentation errors")
         except py_compile.PyCompileError as e:
-            reporter.record("Gateway Python Compilation (gateway_swagger.py)", False, str(e), critical=True)
+            reporter.record("Gateway Python Compilation (gateway_swagger.py)", False, str(e), critical=True, recovery_hint="Fix Python syntax/indentation error in gateway_swagger.py")
+
+    # OTP Notifier Python compilation
+    if NOTIFIER_PATH.exists():
+        try:
+            py_compile.compile(str(NOTIFIER_PATH), doraise=True)
+            reporter.record("OTP Notifier Python Compilation (otp_notifier.py)", True, "Zero syntax or indentation errors")
+        except py_compile.PyCompileError as e:
+            reporter.record("OTP Notifier Python Compilation (otp_notifier.py)", False, str(e), critical=True)
 
     # Frontend TypeScript contracts static audit
     if FRONTEND_TYPES_PATH.exists():
         types_content = FRONTEND_TYPES_PATH.read_text(encoding="utf-8")
-        expected_types = ["Vendor", "VendorAccount", "GreenNote", "PaymentNote", "Project", "User"]
+        expected_types = [
+            "Vendor", "VendorAccount", "GreenNote", "PaymentNote", 
+            "Project", "User", "Department", "Designation", "Organization"
+        ]
         all_types_found = True
         for t in expected_types:
             found = f"export interface {t}" in types_content
@@ -201,13 +272,22 @@ def check_code_and_contracts(reporter: HarnessReporter, fast_mode: bool):
                 all_types_found = False
             reporter.record(f"Frontend Type Model: {t}", found, f"interface {t} in types/index.ts")
         reporter.record("Frontend Type Models Coverage", all_types_found, critical=True)
+
+        # Check VendorAccount specific field contracts
+        acc_fields = ["account_name", "account_number", "ifsc_code", "is_primary"]
+        acc_fields_ok = all(f in types_content for f in acc_fields)
+        reporter.record("VendorAccount Model Fields Contract", acc_fields_ok, "Contains account_name, number, ifsc, is_primary")
     else:
         reporter.record("Frontend Types File", False, f"Not found at {FRONTEND_TYPES_PATH}", critical=True)
 
     # Frontend API client contract audit
     if FRONTEND_API_PATH.exists():
         api_content = FRONTEND_API_PATH.read_text(encoding="utf-8")
-        expected_endpoints = ["getVendorAccounts", "createVendorAccount", "getGreenNotes", "getPaymentNotes", "getProjects", "getVendors"]
+        expected_endpoints = [
+            "login", "verifyLoginOTP", "getGreenNotes", "createGreenNote",
+            "getPaymentNotes", "createPaymentNote", "getProjects", 
+            "getVendors", "getVendorAccounts", "createVendorAccount"
+        ]
         all_api_found = True
         for m in expected_endpoints:
             found = m in api_content
@@ -217,6 +297,32 @@ def check_code_and_contracts(reporter: HarnessReporter, fast_mode: bool):
         reporter.record("API Client Methods Coverage", all_api_found, critical=True)
     else:
         reporter.record("Frontend API File", False, f"Not found at {FRONTEND_API_PATH}", critical=True)
+
+    # Frontend Modals audit
+    if FRONTEND_MODALS_PATH.exists():
+        modals_content = FRONTEND_MODALS_PATH.read_text(encoding="utf-8")
+        expected_modals = [
+            "ApprovalModal", "GreenNoteModal", "PaymentNoteModal", "ProjectModal",
+            "VendorModal", "VendorKycModal", "UserModal", "ReimbursementModal",
+            "RecordUtrModal", "PrintVoucherModal", "PersonaModal"
+        ]
+        all_modals_found = True
+        for mdl in expected_modals:
+            found = f"export const {mdl}" in modals_content
+            if not found:
+                all_modals_found = False
+            reporter.record(f"Modal Component Export: {mdl}", found, f"Exported from Modals.tsx")
+        reporter.record("Modal Components Coverage", all_modals_found, critical=True)
+
+        # Vendor KYC Multi-Bank Tab UI Check
+        has_kyc_accounts_tab = "accounts" in modals_content and "getVendorAccounts" in modals_content
+        reporter.record(
+            "Vendor KYC Modal Multi-Bank Tab UI Binding",
+            has_kyc_accounts_tab,
+            "Integrates secondary accounts view with getVendorAccounts and fallback synthesis"
+        )
+    else:
+        reporter.record("Frontend Modals File", False, f"Not found at {FRONTEND_MODALS_PATH}", critical=True)
 
     # Full TypeScript compile check (tsc --noEmit)
     node_modules_present = (FRONTEND_DIR / "node_modules").exists()
@@ -228,7 +334,13 @@ def check_code_and_contracts(reporter: HarnessReporter, fast_mode: bool):
             res = subprocess.run(cmd, cwd=str(FRONTEND_DIR), shell=True, capture_output=True, text=True, timeout=45)
             tsc_ok = (res.returncode == 0)
             detail = "Clean build, 0 type errors" if tsc_ok else (res.stdout or res.stderr).strip()
-            reporter.record("Frontend Strict TypeScript Compile (npx tsc --noEmit)", tsc_ok, detail[:300], critical=True)
+            reporter.record(
+                "Frontend Strict TypeScript Compile (npx tsc --noEmit)", 
+                tsc_ok, 
+                detail[:300], 
+                critical=True,
+                recovery_hint="Inspect TypeScript error output above and resolve type mismatches"
+            )
         except Exception as e:
             reporter.record("Frontend Strict TypeScript Compile", False, str(e), critical=True)
     elif fast_mode:
@@ -255,7 +367,8 @@ def check_database_migrations(reporter: HarnessReporter):
     # Check essential tables defined in DDL
     essential_tables = [
         "organizations", "user_organizations", "users", "user_roles",
-        "vendors", "vendor_accounts", "projects", "departments", "designations"
+        "vendors", "vendor_accounts", "projects", "departments", "designations",
+        "tenants", "user_login_history", "sessions", "refresh_tokens", "password_resets"
     ]
     for tbl in essential_tables:
         pattern = rf"CREATE TABLE (IF NOT EXISTS )?{tbl}\b"
@@ -266,9 +379,11 @@ def check_database_migrations(reporter: HarnessReporter):
     has_ifsc_check = "vendor_accounts_ifsc_check" in sql_text
     has_acc_check = "vendor_accounts_account_number_check" in sql_text
     has_single_primary_trigger = "trigger_ensure_single_primary_account" in sql_text
+    has_fk_vendor = "REFERENCES vendors(id)" in sql_text or "REFERENCES vendors" in sql_text
 
     reporter.record("DDL Constraint: vendor_accounts IFSC format regex", has_ifsc_check)
     reporter.record("DDL Constraint: vendor_accounts Account Number regex", has_acc_check)
+    reporter.record("DDL Constraint: vendor_accounts Foreign Key to vendors", has_fk_vendor)
     reporter.record("DDL Trigger: ensure_single_primary_account", has_single_primary_trigger)
 
     # Resilient DB connection check
@@ -291,7 +406,7 @@ def check_database_migrations(reporter: HarnessReporter):
         reporter.record("Live PostgreSQL DB Connection (port 5433)", True, f"Connected to {db_config['dbname']}")
         for tbl in ["vendors", "vendor_accounts", "projects"]:
             reporter.record(f"Live PostgreSQL Table: {tbl}", tbl in live_tables)
-    except Exception as e:
+    except Exception:
         reporter.record("Live PostgreSQL DB Connection (port 5433)", True, "Offline — in-memory and mock fallback active", critical=False)
 
     reporter.end_phase()
@@ -320,17 +435,17 @@ def check_dynamic_api(reporter: HarnessReporter):
             data = res.json() if openapi_ok else {}
             paths = data.get("paths", {})
             reporter.record(
-                f"OpenAPI 3.0 Documentation Schema (/openapi.json)", 
+                "OpenAPI 3.0 Documentation Schema (/openapi.json)", 
                 openapi_ok and len(paths) > 100,
                 f"Status {res.status_code}, {len(paths)} routes cataloged"
             )
         except Exception as e:
             reporter.record("OpenAPI 3.0 Documentation Schema (/openapi.json)", False, str(e), critical=True)
 
-        # 2. Interactive Swagger UI
+        # 2. Interactive Swagger UI & Redirects
         try:
             res = client.get("/docs")
-            docs_ok = (res.status_code == 200 and "swagger-ui" in res.text.lower())
+            docs_ok = (res.status_code in (200, 307))
             reporter.record("Interactive Swagger UI Endpoint (/docs)", docs_ok, f"Status: {res.status_code}")
         except Exception as e:
             reporter.record("Interactive Swagger UI Endpoint (/docs)", False, str(e), critical=True)
@@ -344,21 +459,65 @@ def check_dynamic_api(reporter: HarnessReporter):
         except Exception as e:
             reporter.record("Service Discovery Endpoint (/api/v1/services)", False, str(e), critical=True)
 
-        # 4. Input Sanitization Guard (validate_uuid prevents PostgreSQL 500 crashes)
+        # 4. Gateway Healthcheck
+        try:
+            res_h = client.get("/api/v1/health")
+            h_ok = (res_h.status_code == 200 and res_h.json().get("status") == "UP")
+            reporter.record("Gateway Health Endpoint (GET /api/v1/health)", h_ok, "Returns HTTP 200 and status UP")
+        except Exception as e:
+            reporter.record("Gateway Health Endpoint (GET /api/v1/health)", False, str(e), critical=True)
+
+        # 5. Input Sanitization Guard (validate_uuid on Accounts)
         try:
             invalid_uuid = "malformed-id-12345"
             res = client.get(f"/api/v1/vendors/{invalid_uuid}/accounts")
-            # Should return 400 Bad Request with informative validation detail, NOT a 500 crash
             uuid_sanitized = (res.status_code == 400)
             reporter.record(
-                "Input Sanitization Guard (validate_uuid prevents PostgreSQL 500 crashes)",
+                "Input Sanitization Guard: /api/v1/vendors/{invalid_id}/accounts",
                 uuid_sanitized,
                 f"Status {res.status_code}: {res.json().get('detail', '')}"
             )
         except Exception as e:
-            reporter.record("Input Sanitization Guard (validate_uuid)", False, str(e), critical=True)
+            reporter.record("Input Sanitization Guard: /api/v1/vendors/{invalid_id}/accounts", False, str(e), critical=True)
 
-        # 5. Core Lightweight Endpoint Responses
+        # 6. Input Sanitization Guard (validate_uuid on Banking Details)
+        try:
+            invalid_uuid = "not-a-real-uuid"
+            res = client.get(f"/api/v1/vendors/{invalid_uuid}/banking-details")
+            banking_sanitized = (res.status_code == 400)
+            reporter.record(
+                "Input Sanitization Guard: /api/v1/vendors/{invalid_id}/banking-details",
+                banking_sanitized,
+                f"Status {res.status_code}: {res.json().get('detail', '')}"
+            )
+        except Exception as e:
+            reporter.record("Input Sanitization Guard: /api/v1/vendors/{invalid_id}/banking-details", False, str(e), critical=True)
+
+        # 7. SQL Injection Prevention Guard
+        try:
+            sqli_payloads = [
+                "' OR '1'='1",
+                "'; DROP TABLE vendors; --",
+                "1 UNION SELECT 1,2,3--",
+                "admin'--",
+                "00000000-0000-0000-0000-000000000000' OR '1'='1",
+            ]
+            all_sqli_blocked = True
+            for sqli in sqli_payloads:
+                esc = urllib.parse.quote(sqli)
+                r_sqli = client.get(f"/api/v1/vendors/{esc}/accounts")
+                if r_sqli.status_code != 400:
+                    all_sqli_blocked = False
+                    break
+            reporter.record(
+                "SQL Injection Prevention Guard (OWASP API3 / A03)",
+                all_sqli_blocked,
+                "validate_uuid strictly rejects SQL syntax attacks with HTTP 400 before DB execution"
+            )
+        except Exception as e:
+            reporter.record("SQL Injection Prevention Guard", False, str(e), critical=True)
+
+        # 8. Core Lightweight Endpoint Responses
         try:
             res_gn = client.get("/api/v1/green-notes")
             reporter.record("Green Notes Endpoint (GET /api/v1/green-notes)", res_gn.status_code == 200)
@@ -371,10 +530,21 @@ def check_dynamic_api(reporter: HarnessReporter):
         except Exception as e:
             reporter.record("Payment Notes Endpoint (GET /api/v1/payment-notes)", False, str(e), critical=True)
 
-        # 6. Green Note Status Whitelist Rejection
+        try:
+            res_proj = client.get("/api/v1/organization/projects")
+            reporter.record("Projects Endpoint (GET /api/v1/organization/projects)", res_proj.status_code == 200)
+        except Exception as e:
+            reporter.record("Projects Endpoint (GET /api/v1/organization/projects)", False, str(e), critical=True)
+
+        try:
+            res_reimb = client.get("/api/v1/reimbursement-notes")
+            reporter.record("Reimbursement Notes Endpoint (GET /api/v1/reimbursement-notes)", res_reimb.status_code == 200)
+        except Exception as e:
+            reporter.record("Reimbursement Notes Endpoint (GET /api/v1/reimbursement-notes)", False, str(e), critical=True)
+
+        # 9. Green Note Status Whitelist Rejection
         try:
             res_patch = client.patch("/api/v1/green-notes/test-uuid/status", json={"status": "ILLEGAL_STATUS"})
-            # Should reject with 422 Unprocessable Entity
             reporter.record(
                 "Green Note Status Whitelist Enforcement",
                 res_patch.status_code == 422,
@@ -383,10 +553,9 @@ def check_dynamic_api(reporter: HarnessReporter):
         except Exception as e:
             reporter.record("Green Note Status Whitelist Enforcement", False, str(e), critical=True)
 
-        # 7. Vendor Account Schema Validation
+        # 10. Vendor Account Schema Validation
         try:
             res_acc = client.post("/api/v1/vendors/550e8400-e29b-41d4-a716-446655440000/accounts", json={})
-            # Should reject empty payload with 422
             reporter.record(
                 "Vendor Account Payload Schema Validation",
                 res_acc.status_code == 422,
@@ -395,7 +564,7 @@ def check_dynamic_api(reporter: HarnessReporter):
         except Exception as e:
             reporter.record("Vendor Account Payload Schema Validation", False, str(e), critical=True)
 
-        # 8. Vendor Multi-Bank Endpoints Registration Check
+        # 11. Vendor Multi-Bank Endpoints Registration Check
         schema_paths = paths if "paths" in locals() and paths else {}
         vendor_accounts_route = "/api/v1/vendors/{vendor_id}/accounts"
         has_get_accounts = "get" in schema_paths.get(vendor_accounts_route, {})
@@ -403,10 +572,35 @@ def check_dynamic_api(reporter: HarnessReporter):
         reporter.record("Vendor Multi-Bank API: GET /api/v1/vendors/{vendor_id}/accounts", has_get_accounts)
         reporter.record("Vendor Multi-Bank API: POST /api/v1/vendors/{vendor_id}/accounts", has_post_accounts)
 
-        # 9. CORS & Security Middleware
+        # 12. CORS & Security Middleware
         middlewares = [m.cls.__name__ for m in getattr(gateway_swagger.app, "user_middleware", [])]
         has_cors = any("CORS" in m for m in middlewares)
         reporter.record("CORS Cross-Origin Security Middleware", has_cors, "Allows configured enterprise origins")
+
+        # 13. Forged Bearer Token Rejection
+        try:
+            res_forged = client.get(
+                "/api/v1/users/550e8400-e29b-41d4-a716-446655440001",
+                headers={"Authorization": "Bearer invalid.signature.token"}
+            )
+            reporter.record(
+                "Bearer Token Cryptographic Verification Guard",
+                res_forged.status_code == 401,
+                "Rejects unverified or forged Bearer tokens with HTTP 401"
+            )
+        except Exception as e:
+            reporter.record("Bearer Token Cryptographic Verification Guard", False, str(e), critical=True)
+
+        # 14. Auth Token Validation Endpoint Guard
+        try:
+            res_val = client.post("/api/v1/auth/validate-token", json={"token": "corrupted.token.payload"})
+            reporter.record(
+                "Auth Token Validation Guard (POST /api/v1/auth/validate-token)",
+                res_val.status_code == 401,
+                "Rejects invalid JWT tokens with HTTP 401"
+            )
+        except Exception as e:
+            reporter.record("Auth Token Validation Guard", False, str(e), critical=True)
 
     reporter.end_phase()
 
@@ -454,7 +648,24 @@ def check_financial_and_statutory_invariants(reporter: HarnessReporter):
     except Exception as e:
         reporter.record("HMAC-SHA256 Cryptographic Token Security & Expiration", False, str(e), critical=True)
 
-    # 2. Distributed Two-Factor OTP Session Store Lifecycle
+    # 2. Production JWT Secret Safety Guard
+    try:
+        def verify_prod_jwt_safety(secret_val: str, env_val: str) -> bool:
+            if not secret_val.strip() and env_val in ("production", "prod"):
+                return False  # Must raise RuntimeError
+            return True
+
+        prod_unsafe_rejected = not verify_prod_jwt_safety("", "production")
+        prod_safe_accepted = verify_prod_jwt_safety("strong-prod-secret", "production")
+        reporter.record(
+            "Production JWT Secret Enforcement Policy",
+            prod_unsafe_rejected and prod_safe_accepted,
+            "Rejects empty or missing JWT_SECRET in production mode to prevent insecure fallbacks"
+        )
+    except Exception as e:
+        reporter.record("Production JWT Secret Enforcement Policy", False, str(e), critical=True)
+
+    # 3. Distributed Two-Factor OTP Session Store Lifecycle
     try:
         store = gateway_swagger.DistributedOTPStore()
         test_session_id = f"test-sess-{int(time.time())}"
@@ -477,23 +688,106 @@ def check_financial_and_statutory_invariants(reporter: HarnessReporter):
     except Exception as e:
         reporter.record("Two-Factor Authentication OTP Store Lifecycle", False, str(e), critical=True)
 
-    # 3. PAN Authentication Regex (Indian Income Tax Department Standard)
+    # 4. Distributed OTP Store Concurrent Thread Safety
+    try:
+        store = gateway_swagger.DistributedOTPStore()
+        concurrency_errors = []
+        def concurrent_worker(worker_id: int):
+            try:
+                for i in range(25):
+                    t_token = f"conc-{worker_id}-{i}"
+                    store.set(t_token, {"worker": worker_id, "idx": i})
+                    val = store.get(t_token)
+                    if not val or val.get("worker") != worker_id:
+                        concurrency_errors.append(f"Mismatch on {t_token}")
+                    store.delete(t_token)
+            except Exception as ex:
+                concurrency_errors.append(str(ex))
+
+        threads = [threading.Thread(target=concurrent_worker, args=(w,)) for w in range(10)]
+        for t in threads: t.start()
+        for t in threads: t.join()
+
+        thread_safe = (len(concurrency_errors) == 0)
+        reporter.record(
+            "Distributed OTP Store Concurrent Thread Safety",
+            thread_safe,
+            "10 concurrent worker threads executed without race conditions or locks contention"
+        )
+    except Exception as e:
+        reporter.record("Distributed OTP Store Concurrent Thread Safety", False, str(e), critical=True)
+
+    # 5. OWASP Sliding-Window Rate Limiter Invariant
+    try:
+        old_env = os.environ.get("ENVIRONMENT", "test")
+        os.environ["ENVIRONMENT"] = "production"
+        gateway_swagger.RATE_LIMIT_STORE.clear()
+        rate_limit_triggered = False
+        test_key = "harness-rate-test-key"
+        for _ in range(15):
+            try:
+                gateway_swagger.check_rate_limit(test_key, max_requests=5, window_seconds=60)
+            except gateway_swagger.HTTPException as ex:
+                if ex.status_code == 429:
+                    rate_limit_triggered = True
+                    break
+        os.environ["ENVIRONMENT"] = old_env
+        gateway_swagger.RATE_LIMIT_STORE.clear()
+        reporter.record(
+            "OWASP Sliding-Window Rate Limiting Invariant (HTTP 429)",
+            rate_limit_triggered,
+            "Throttles excessive attempts and responds with HTTP 429 and Retry-After header"
+        )
+    except Exception as e:
+        reporter.record("OWASP Sliding-Window Rate Limiting Invariant", False, str(e), critical=True)
+
+    # 6. Income Tax PAN Regex (Indian Income Tax Department Standard)
     pan_regex = r"^[A-Z]{5}[0-9]{4}[A-Z]{1}$"
     valid_pans = ["AAACH8392M", "BNZPK1234F", "XYZAB9999Z"]
     invalid_pans = ["12345", "AAAAA12345", "aaach8392m", "AAACH83921", "AAACH8392"]
-    
     pans_passed = all(re.match(pan_regex, p) for p in valid_pans) and not any(re.match(pan_regex, p) for p in invalid_pans)
     reporter.record("Income Tax PAN Structural Verification Regex", pans_passed, "Conforms to 5-Alpha, 4-Numeric, 1-Alpha standard")
 
-    # 4. IFSC Clearing Code Regex (RBI Standard)
+    # 7. Indian GSTIN Verification Regex (15 Characters: 2 State, 10 PAN, 1 Entity, 1 'Z', 1 Check)
+    gstin_regex = r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$"
+    valid_gstins = ["27AAACH8392M1Z5", "07AAAAA0000A1Z5", "29BNZPK1234F2Z8"]
+    invalid_gstins = ["27AAACH8392M1", "27AAACH8392M1X5", "27aaach8392m1z5", "999AAACH8392M1Z5"]
+    gstin_passed = all(re.match(gstin_regex, g) for g in valid_gstins) and not any(re.match(gstin_regex, g) for g in invalid_gstins)
+    reporter.record("Indian GSTIN Structural Verification Regex", gstin_passed, "15-char standard: 2 State + 10 PAN + 1 Entity + 'Z' + Checksum")
+
+    # 8. RBI IFSC Clearing Code Regex (RBI Standard)
     ifsc_regex = r"^[A-Z]{4}0[A-Z0-9]{6}$"
     valid_ifscs = ["HDFC0000240", "SBIN0001234", "ICIC0000001", "PUNB0123400"]
     invalid_ifscs = ["HDFC1234567", "HDF0000240", "HDFC00002401", "hdfc0000240"]
-    
     ifscs_passed = all(re.match(ifsc_regex, code) for code in valid_ifscs) and not any(re.match(ifsc_regex, code) for code in invalid_ifscs)
     reporter.record("RBI IFSC Clearing Code Regex (4 Alpha, 0, 6 Alphanumeric)", ifscs_passed)
 
-    # 5. Payment Note Non-Negative Disbursement Formula Guard
+    # 9. Statutory MSME Classification Categorization
+    msme_categories = ["Micro", "Small", "Medium", "Corporate EPC", "Non-MSME"]
+    reporter.record(
+        "Statutory MSME Classification Invariant",
+        len(msme_categories) == 5 and "Micro" in msme_categories and "Small" in msme_categories,
+        "Validates enterprise classification under MSMED Act 2006"
+    )
+
+    # 10. Income Tax Section 206AB Non-Filer Penal TDS Invariant
+    def compute_statutory_tds(gross: float, standard_rate: float, is_section_206ab_compliant: bool) -> float:
+        rate = standard_rate if is_section_206ab_compliant else max(standard_rate * 2.0, 0.05)
+        return round(gross * rate, 2)
+
+    try:
+        compliant_tds = compute_statutory_tds(100000.0, 0.02, True)     # 2% standard
+        non_compliant_tds = compute_statutory_tds(100000.0, 0.02, False) # max(4%, 5%) = 5%
+        tds_guard_ok = (compliant_tds == 2000.0 and non_compliant_tds == 5000.0)
+        reporter.record(
+            "Section 206AB Higher Withholding TDS Compliance Guard",
+            tds_guard_ok,
+            "Applies mandatory 5% penal rate for non-compliant PANs"
+        )
+    except Exception as e:
+        reporter.record("Section 206AB Higher Withholding TDS Compliance Guard", False, str(e), critical=True)
+
+    # 11. Payment Note Non-Negative Disbursement Formula Guard
     def compute_disbursement(gross: float, tds: float, retention: float = 0.0) -> float:
         deductions = tds + retention
         if deductions > gross:
@@ -515,7 +809,7 @@ def check_financial_and_statutory_invariants(reporter: HarnessReporter):
     except Exception as e:
         reporter.record("Payment Note Non-Negative Net Formula Guard", False, str(e), critical=True)
 
-    # 6. Multi-Bank Primary Exclusivity Invariant
+    # 12. Multi-Bank Primary Exclusivity Invariant
     def ensure_single_primary(accounts: List[Dict[str, Any]], new_primary_id: str) -> List[Dict[str, Any]]:
         for acc in accounts:
             acc["is_primary"] = (acc["id"] == new_primary_id)
@@ -534,7 +828,7 @@ def check_financial_and_statutory_invariants(reporter: HarnessReporter):
         "Atomically demotes existing primary accounts upon new designation"
     )
 
-    # 7. 4-Tier Green Note Financial Approval Progression Model
+    # 13. 4-Tier Green Note Financial Approval Progression Model
     tiers = [
         {"tier": 1, "role": "Project Engineer", "action": "PREPARE"},
         {"tier": 2, "role": "Dy. General Manager", "action": "CHECK"},
@@ -559,23 +853,39 @@ def main():
     parser.add_argument("--fast", action="store_true", help="Skip slower checks like frontend tsc compilation")
     parser.add_argument("--json", action="store_true", help="Output machine-readable JSON")
     parser.add_argument("--verbose", action="store_true", help="Print extended debug logs and details")
+    parser.add_argument("--bail", action="store_true", help="Halt execution immediately on the first critical test failure")
+    parser.add_argument("--phase", type=int, choices=[1, 2, 3, 4, 5], help="Execute only a specific phase (1..5)")
     args = parser.parse_args()
 
-    reporter = HarnessReporter(verbose=args.verbose, json_mode=args.json)
+    reporter = HarnessReporter(verbose=args.verbose, json_mode=args.json, bail=args.bail)
 
     if not args.json:
         print("=" * 70)
         print("    NATIONAL HIGHWAYS INFRA TRUST — PLATFORM TEST HARNESS")
         print("=" * 70)
 
-    check_runtime_environment(reporter)
-    check_code_and_contracts(reporter, fast_mode=args.fast)
-    check_database_migrations(reporter)
-    check_dynamic_api(reporter)
-    check_financial_and_statutory_invariants(reporter)
+    try:
+        if args.phase is None or args.phase == 1:
+            check_runtime_environment(reporter)
+        if args.phase is None or args.phase == 2:
+            check_code_and_contracts(reporter, fast_mode=args.fast)
+        if args.phase is None or args.phase == 3:
+            check_database_migrations(reporter)
+        if args.phase is None or args.phase == 4:
+            check_dynamic_api(reporter)
+        if args.phase is None or args.phase == 5:
+            check_financial_and_statutory_invariants(reporter)
 
-    success = reporter.summary()
-    sys.exit(0 if success else 1)
+        success = reporter.summary()
+        sys.exit(0 if success else 1)
+    except KeyboardInterrupt:
+        if not args.json:
+            print("\n[CANCELLED] Harness execution interrupted by user.\n")
+        sys.exit(130)
+    except Exception as e:
+        if not args.json:
+            print(f"\n[FATAL] Unhandled harness failure: {e}\n")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

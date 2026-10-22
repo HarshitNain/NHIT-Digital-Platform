@@ -88,10 +88,14 @@ Green Notes govern expenditure requests across NHIT highway stretches and corpor
    ```bash
    python -m py_compile "NHIT Backend/gateway_swagger.py"
    ```
-3. **Execute Full Health & Test Harness**:
+3. **Execute Full Health & Test Harness (103+ Invariant Checks)**:
    ```bash
    python "NHIT Backend/scripts/harness.py"
    ```
+   - Fast mode: `python "NHIT Backend/scripts/harness.py" --fast`
+   - Specific phase: `python "NHIT Backend/scripts/harness.py" --phase 1` (1-5)
+   - Fail-fast mode: `python "NHIT Backend/scripts/harness.py" --bail`
+   - JSON report: `python "NHIT Backend/scripts/harness.py" --json`
 
 ---
 

@@ -162,12 +162,14 @@ def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Depen
 
 # In-memory OTP storage for Two-Factor (2-Way) Authentication
 from collections import defaultdict
+import threading
 import time
 
 class DistributedOTPStore:
     """Distributed OTP session store with Redis support and thread-safe local fallback (OWASP API8:2023 mitigation)."""
     def __init__(self):
         self._local: Dict[str, dict] = {}
+        self._lock = threading.Lock()
         self._redis = None
         redis_url = os.environ.get("REDIS_URL", "").strip()
         if redis_url:
@@ -190,7 +192,8 @@ class DistributedOTPStore:
                 return
             except Exception:
                 pass
-        self._local[token] = stored_data
+        with self._lock:
+            self._local[token] = stored_data
 
     def get(self, token: str) -> Optional[dict]:
         if self._redis:
@@ -201,7 +204,9 @@ class DistributedOTPStore:
             except Exception:
                 pass
         self.clean_expired()
-        return self._local.get(token)
+        with self._lock:
+            val = self._local.get(token)
+            return dict(val) if val else None
 
     def delete(self, token: str):
         if self._redis:
@@ -209,13 +214,15 @@ class DistributedOTPStore:
                 self._redis.delete(f"otp:{token}")
             except Exception:
                 pass
-        self._local.pop(token, None)
+        with self._lock:
+            self._local.pop(token, None)
 
     def clean_expired(self):
         now = datetime.datetime.now(datetime.timezone.utc).timestamp()
-        expired = [k for k, v in self._local.items() if v.get("expires_at", float("inf")) < now]
-        for k in expired:
-            self._local.pop(k, None)
+        with self._lock:
+            expired = [k for k, v in list(self._local.items()) if v.get("expires_at", float("inf")) < now]
+            for k in expired:
+                self._local.pop(k, None)
 
 otp_store = DistributedOTPStore()
 OTP_STORE = otp_store  # Backward compatibility alias
@@ -2339,6 +2346,7 @@ async def get_vendor_accounts(vendor_id: str = Path(..., description="Vendor UUI
 @app.get("/api/v1/vendors/{vendor_id}/banking-details", tags=["🤝 Vendor Service — Accounts"], summary="Get Vendor Banking Details",
          description="Returns the primary banking details for a vendor, used in payment processing.")
 async def get_vendor_banking(vendor_id: str = Path(..., description="Vendor UUID")):
+    vendor_id = validate_uuid(vendor_id, "vendor_id")
     try:
         accounts = query_db("""
             SELECT id, vendor_id, account_name, account_number, account_type, 
@@ -2347,7 +2355,28 @@ async def get_vendor_banking(vendor_id: str = Path(..., description="Vendor UUID
         """, (vendor_id,))
         if not accounts:
             accounts = query_db("SELECT * FROM vendor_accounts WHERE vendor_id = %s LIMIT 1", (vendor_id,))
+        if not accounts:
+            v_rows = query_db("""
+                SELECT id, vendor_name, beneficiary_name, account_name, account_number, 
+                       name_of_bank, ifsc_code, from_account_type
+                FROM vendors WHERE id = %s
+            """, (vendor_id,))
+            if v_rows and (v_rows[0].get("account_number") or v_rows[0].get("name_of_bank")):
+                v = v_rows[0]
+                accounts = [{
+                    "id": f"primary-{v['id']}",
+                    "vendor_id": str(v["id"]),
+                    "account_name": v.get("account_name") or v.get("beneficiary_name") or v.get("vendor_name") or "Primary Commercial Account",
+                    "account_number": v.get("account_number") or "N/A",
+                    "account_type": v.get("from_account_type") or "Current",
+                    "name_of_bank": v.get("name_of_bank") or "Primary Bank",
+                    "branch_name": "Main Corporate Branch",
+                    "ifsc_code": v.get("ifsc_code") or "N/A",
+                    "is_primary": True,
+                }]
         return {"banking_details": accounts[0] if accounts else {}}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(500, str(e))
 
