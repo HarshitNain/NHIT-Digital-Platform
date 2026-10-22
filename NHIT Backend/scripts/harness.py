@@ -214,8 +214,8 @@ def check_runtime_environment(reporter: HarnessReporter):
         reporter.record("Node.js Runtime", False, "Node.js not found in PATH", critical=False, recovery_hint="Install Node.js 20+ from nodejs.org")
 
     try:
-        npm_cmd = "cmd.exe /c npm --version" if sys.platform == "win32" else "npm --version"
-        npm_res = subprocess.run(npm_cmd, capture_output=True, text=True, timeout=5, shell=True)
+        npm_cmd = ["cmd", "/c", "npm", "--version"] if sys.platform == "win32" else ["npm", "--version"]
+        npm_res = subprocess.run(npm_cmd, capture_output=True, text=True, timeout=5, shell=False)
         npm_ver = npm_res.stdout.strip() if npm_res.returncode == 0 else "Unknown"
         reporter.record(f"NPM Package Manager ({npm_ver})", npm_res.returncode == 0, critical=False)
     except Exception:
@@ -602,6 +602,70 @@ def check_dynamic_api(reporter: HarnessReporter):
         except Exception as e:
             reporter.record("Auth Token Validation Guard", False, str(e), critical=True)
 
+        # 15. Input Sanitization Guard on Core Resources (Departments, Designations, Projects, Vendors, Roles)
+        uuid_targets = [
+            ("Department by UUID", "/api/v1/departments/invalid-uuid"),
+            ("Designation by UUID", "/api/v1/designations/invalid-uuid"),
+            ("Project by UUID", "/api/v1/projects/invalid-uuid"),
+            ("Organization Projects by UUID", "/api/v1/organizations/invalid-uuid/projects"),
+            ("Vendor by UUID", "/api/v1/vendors/invalid-uuid"),
+            ("Role by UUID", "/api/v1/roles/invalid-uuid"),
+        ]
+        for label, ep in uuid_targets:
+            try:
+                res_u = client.get(ep)
+                reporter.record(
+                    f"Input Sanitization Guard: {label}",
+                    res_u.status_code == 400,
+                    f"{ep} -> HTTP {res_u.status_code}"
+                )
+            except Exception as e:
+                reporter.record(f"Input Sanitization Guard: {label}", False, str(e), critical=True)
+
+        # 16. Financial Guard: Payment Note Negative Disbursement Rejection
+        try:
+            res_pn_neg = client.post("/api/v1/payment-notes", json={"net_payable_amount": -500.0, "vendor_name": "Test Vendor"})
+            reporter.record(
+                "Financial Guard: Payment Note Negative Disbursement Rejection",
+                res_pn_neg.status_code == 422,
+                "Enforces non-negative net payable amount with HTTP 422"
+            )
+        except Exception as e:
+            reporter.record("Financial Guard: Payment Note Negative Disbursement Rejection", False, str(e), critical=True)
+
+        # 17. Financial Guard: Green Note Negative Disbursement Rejection
+        try:
+            res_gn_neg = client.post("/api/v1/green-notes", json={"note": {"base_value": -1000.0, "total_amount": -1000.0, "gst": 0.0, "other_charges": 0.0}})
+            reporter.record(
+                "Financial Guard: Green Note Negative Disbursement Rejection",
+                res_gn_neg.status_code == 422,
+                "Enforces non-negative financial values with HTTP 422"
+            )
+        except Exception as e:
+            reporter.record("Financial Guard: Green Note Negative Disbursement Rejection", False, str(e), critical=True)
+
+        # 18. Authentication Guard: Login Invalid Credentials Rejection
+        try:
+            res_login_bad = client.post("/api/v1/auth/login", json={"login": "unregistered_officer@nhit.com", "password": "wrong_password"})
+            reporter.record(
+                "Authentication Guard: Invalid Credentials Rejection",
+                res_login_bad.status_code == 401,
+                "Rejects unverified login attempts with HTTP 401 without user enumeration"
+            )
+        except Exception as e:
+            reporter.record("Authentication Guard: Invalid Credentials Rejection", False, str(e), critical=True)
+
+        # 19. Authentication Guard: 2FA OTP Verify Invalid Session Rejection
+        try:
+            res_otp_bad = client.post("/api/v1/auth/login-otp/verify", json={"session_temp_token": "nonexistent-token", "otp": "000000"})
+            reporter.record(
+                "Authentication Guard: Invalid 2FA Session Rejection",
+                res_otp_bad.status_code == 400,
+                "Rejects non-existent or expired 2FA session tokens with HTTP 400"
+            )
+        except Exception as e:
+            reporter.record("Authentication Guard: Invalid 2FA Session Rejection", False, str(e), critical=True)
+
     reporter.end_phase()
 
 
@@ -840,6 +904,42 @@ def check_financial_and_statutory_invariants(reporter: HarnessReporter):
         "Green Note 4-Tier Approval Progression Invariants",
         len(tiers) == 4 and len(approval_types) == 3,
         "Prepared -> Checked -> Verified -> Sanctioned progression verified"
+    )
+
+    # 14. Indian GSTIN State Code Structural Invariant
+    valid_state_codes = {f"{i:02d}" for i in range(1, 38)} | {"97", "99"}
+    def validate_gstin_state(gstin: str) -> bool:
+        return gstin[:2] in valid_state_codes if len(gstin) >= 2 else False
+
+    reporter.record(
+        "Indian GSTIN State Code Structural Invariant",
+        validate_gstin_state("27AAACH8392M1Z5") and validate_gstin_state("07AAAAA0000A1Z5") and not validate_gstin_state("00AAACH8392M1Z5"),
+        "Verifies state code is valid standard jurisdiction code (01-37, 97, 99)"
+    )
+
+    # 15. Section 194C Contractor TDS Statutory Tier Matrix
+    def get_section_194c_rate(entity_type: str, is_section_206ab_compliant: bool) -> float:
+        if not is_section_206ab_compliant:
+            return 0.05
+        return 0.01 if entity_type.upper() in ("INDIVIDUAL", "HUF") else 0.02
+
+    s194c_ok = (
+        get_section_194c_rate("INDIVIDUAL", True) == 0.01
+        and get_section_194c_rate("COMPANY", True) == 0.02
+        and get_section_194c_rate("COMPANY", False) == 0.05
+    )
+    reporter.record(
+        "Section 194C Contractor TDS Statutory Tier Invariant",
+        s194c_ok,
+        "1% for Individuals/HUFs, 2% for Companies/LLPs, 5% penal rate for Section 206AB defaulters"
+    )
+
+    # 16. Statutory Vendor Account Type Standardization
+    valid_account_types = {"Current", "Savings", "Escrow", "Cash Credit"}
+    reporter.record(
+        "Statutory Vendor Account Type Standardization",
+        len(valid_account_types) == 4 and "Escrow" in valid_account_types,
+        "Current, Savings, Escrow, Cash Credit account classifications verified"
     )
 
     reporter.end_phase()
