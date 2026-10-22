@@ -179,13 +179,18 @@ class DistributedOTPStore:
                 print(f"[CACHE] Redis not available ({e}), using in-process OTP store.")
 
     def set(self, token: str, data: dict, ttl_seconds: int = 300):
+        now = datetime.datetime.now(datetime.timezone.utc).timestamp()
+        stored_data = dict(data)
+        if "expires_at" not in stored_data:
+            stored_data["expires_at"] = now + ttl_seconds
+
         if self._redis:
             try:
-                self._redis.setex(f"otp:{token}", ttl_seconds, json.dumps(data))
+                self._redis.setex(f"otp:{token}", ttl_seconds, json.dumps(stored_data))
                 return
             except Exception:
                 pass
-        self._local[token] = data
+        self._local[token] = stored_data
 
     def get(self, token: str) -> Optional[dict]:
         if self._redis:
@@ -208,7 +213,7 @@ class DistributedOTPStore:
 
     def clean_expired(self):
         now = datetime.datetime.now(datetime.timezone.utc).timestamp()
-        expired = [k for k, v in self._local.items() if v.get("expires_at", 0) < now]
+        expired = [k for k, v in self._local.items() if v.get("expires_at", float("inf")) < now]
         for k in expired:
             self._local.pop(k, None)
 
