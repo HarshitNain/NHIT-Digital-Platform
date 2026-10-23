@@ -7,7 +7,7 @@ Please refer to [AGENTS.md](./AGENTS.md) for the complete architecture, domain w
 - **Gateway**: FastAPI on port `8000` (`NHIT Backend/gateway_swagger.py`).
 - **Frontend**: React 18 / 19 + TypeScript on port `5173` (`nhit-frontend/`).
 - **Database**: PostgreSQL 15 on port `5433` (DB: `nhit_db`, User: `postgres`, Password: `shristi`).
-- **Verification Harness**: `python "NHIT Backend/scripts/harness.py"` (116+ checks, `--fast`, `--bail`, `--phase`).
+- **Verification Harness**: `python "NHIT Backend/scripts/harness.py"` (117+ checks, `--fast`, `--bail`, `--phase`).
 - **TypeScript Check**: `cd nhit-frontend && npx tsc --noEmit`.
 
 ## Key Rules

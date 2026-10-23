@@ -8,7 +8,7 @@ description: >-
 
 This skill provides step-by-step instructions to verify the integrity of the NHIT Digital Platform across backend services, database migrations, dynamic API routing, OWASP security, and frontend compilation.
 
-## 1. Automated Verification Harness (116+ Checks)
+## 1. Automated Verification Harness (117+ Checks)
 Run the unified platform test harness script from the workspace root:
 ```bash
 python "NHIT Backend/scripts/harness.py"
