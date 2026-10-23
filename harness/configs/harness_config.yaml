@@ -1,0 +1,138 @@
+# ==============================================================================
+# NHIT Digital Platform — Automated Verification Harness Configuration
+# Enterprise Test Harness & Invariant Assurance Specification
+# ==============================================================================
+
+version: "2.0"
+platform: "NHIT Digital Platform"
+target_enterprise: "National Highways Infra Trust"
+
+# Runtime Environment Constraints
+environment:
+  python:
+    min_version: "3.10.0"
+    target_version: "3.12"
+  node:
+    min_version: "20.0.0"
+    target_version: "22.0.0"
+  go:
+    min_version: "1.24.0"
+
+# Network & Service Connectivity Defaults
+services:
+  gateway:
+    host: "127.0.0.1"
+    port: 8000
+    health_endpoint: "/api/v1/health"
+    discovery_endpoint: "/api/v1/services"
+    openapi_endpoint: "/openapi.json"
+    docs_endpoint: "/docs"
+  database:
+    host: "127.0.0.1"
+    port: 5433
+    dbname: "nhit_db"
+    user: "postgres"
+    password_env: "DB_PASSWORD"
+    default_password: "shristi"
+    connection_timeout_seconds: 3
+  redis:
+    host: "127.0.0.1"
+    port: 6379
+    url_env: "REDIS_URL"
+    default_url: "redis://127.0.0.1:6379/0"
+
+# Microservices Directory Catalog
+microservices:
+  backend_services:
+    - name: "auth-service"
+      path: "NHIT Backend/services/auth-service"
+      port: 50052
+    - name: "user-service"
+      path: "NHIT Backend/services/user-service"
+      port: 50053
+    - name: "organization-service"
+      path: "NHIT Backend/services/organization-service"
+      port: 50054
+    - name: "department-service"
+      path: "NHIT Backend/services/department-service"
+      port: 50055
+    - name: "designation-service"
+      path: "NHIT Backend/services/designation-service"
+      port: 50057
+    - name: "project-service"
+      path: "NHIT Backend/services/project-service"
+      port: 50058
+    - name: "vendor-service"
+      path: "NHIT Backend/services/vendor-service"
+      port: 50059
+    - name: "api-gateway"
+      path: "NHIT Backend/services/api-gateway"
+      port: 8080
+  note_services:
+    - name: "greennote-service"
+      path: "Nhit-Note/services/greennote-service"
+      port: 50060
+    - name: "paymentnote-service"
+      path: "Nhit-Note/services/paymentnote-service"
+      port: 50061
+    - name: "potracking-service"
+      path: "Nhit-Note/services/potracking-service"
+      port: 50062
+    - name: "payment-service"
+      path: "Nhit-Note/services/payment-service"
+      port: 50063
+
+# Protocol Buffers Specifications Catalog
+grpc_proto_contracts:
+  - proto_path: "NHIT Backend/api/proto/auth.proto"
+    generated_go: "NHIT Backend/api/pb/authpb/auth.pb.go"
+  - proto_path: "Nhit-Note/api/proto/greennote.proto"
+    generated_go: "Nhit-Note/api/pb/greennotepb/greennote.pb.go"
+  - proto_path: "Nhit-Note/api/proto/paymentnote.proto"
+    generated_go: "Nhit-Note/api/pb/paymentnotepb/paymentnote.pb.go"
+  - proto_path: "Nhit-Note/api/proto/payment.proto"
+    generated_go: "Nhit-Note/api/pb/paymentpb/payment.pb.go"
+  - proto_path: "Nhit-Note/api/proto/approval.proto"
+    generated_go: "Nhit-Note/api/pb/approvalpb/approval.pb.go"
+
+# Statutory & Financial Rule Enforcement
+statutory_rules:
+  income_tax:
+    pan_regex: "^[A-Z]{5}[0-9]{4}[A-Z]$"
+    tds_section_194c:
+      individual_huf_rate: 0.01   # 1% TDS on individuals / HUF contractors
+      company_firm_rate: 0.02     # 2% TDS on corporate contractors
+      higher_deduction_rate: 0.20 # 20% TDS under Section 206AB for non-filers
+  gst:
+    gstin_regex: "^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$"
+    min_state_code: 1
+    max_state_code: 38
+  rbi_banking:
+    ifsc_regex: "^[A-Z]{4}0[A-Z0-9]{6}$"
+    account_number_regex: "^[0-9]{9,18}$"
+  msme_classifications:
+    - "Micro Enterprise"
+    - "Small Enterprise"
+    - "Medium Enterprise"
+    - "Corporate EPC"
+
+# Security & Cryptographic Invariants
+security:
+  jwt:
+    algorithm: "HS256"
+    min_secret_length: 32
+    default_expiry_seconds: 7200
+  otp_2fa:
+    code_length: 6
+    expiry_seconds: 300
+    concurrent_threads: 10
+  rate_limiting:
+    max_requests: 5
+    window_seconds: 60
+
+# Test Execution & Reporting Flags
+reporting:
+  default_reports_dir: "harness/reports"
+  html_report_filename: "harness_report.html"
+  markdown_report_filename: "harness_report.md"
+  json_report_filename: "harness_report.json"

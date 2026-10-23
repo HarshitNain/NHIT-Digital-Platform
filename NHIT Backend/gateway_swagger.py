@@ -175,10 +175,13 @@ class DistributedOTPStore:
         if redis_url:
             try:
                 import redis  # type: ignore
-                self._redis = redis.from_url(redis_url, decode_responses=True)
+                client = redis.from_url(redis_url, decode_responses=True, socket_connect_timeout=0.5, socket_timeout=0.5)
+                client.ping()
+                self._redis = client
                 print(f"[CACHE] Connected to distributed Redis OTP cache: {redis_url}")
             except Exception as e:
-                print(f"[CACHE] Redis not available ({e}), using in-process OTP store.")
+                self._redis = None
+                print(f"[CACHE] Redis not reachable ({e}), using in-process OTP store.")
 
     def set(self, token: str, data: dict, ttl_seconds: int = 300):
         now = datetime.datetime.now(datetime.timezone.utc).timestamp()
@@ -191,7 +194,7 @@ class DistributedOTPStore:
                 self._redis.setex(f"otp:{token}", ttl_seconds, json.dumps(stored_data))
                 return
             except Exception:
-                pass
+                self._redis = None
         with self._lock:
             self._local[token] = stored_data
 
@@ -202,7 +205,7 @@ class DistributedOTPStore:
                 if raw:
                     return json.loads(raw)
             except Exception:
-                pass
+                self._redis = None
         self.clean_expired()
         with self._lock:
             val = self._local.get(token)

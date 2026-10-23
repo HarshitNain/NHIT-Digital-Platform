@@ -42,3 +42,8 @@ Thumbs.db
 *.dylib
 *.bin
 bin/
+
+# Test Harness Generated Reports
+harness/reports/*.html
+harness/reports/*.md
+!harness/reports/.gitkeep

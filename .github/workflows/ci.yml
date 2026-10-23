@@ -169,7 +169,7 @@ jobs:
         run: |
           python "NHIT Backend/scripts/setup_test_db.py"
 
-      - name: Execute Full Platform Invariant Harness (117+ Checks)
+      - name: Execute Full Platform Invariant Harness (144+ Checks across 7 Phases)
         env:
           DB_HOST: 127.0.0.1
           DB_PORT: 5432
@@ -179,7 +179,7 @@ jobs:
           REDIS_URL: redis://127.0.0.1:6379/0
           ENVIRONMENT: test
         run: |
-          python "NHIT Backend/scripts/harness.py" --fast
+          python "NHIT Backend/scripts/harness.py" --fast --html harness/reports/harness_report.html --markdown harness/reports/harness_report.md
 
       - name: Launch Gateway & Execute Full Integration Test Suite
         env:
@@ -196,9 +196,13 @@ jobs:
           set -o pipefail
           python -u tests/run_ci_backend.py 2>&1 | tee ci_backend.log
 
-      - name: Publish Test Results to Job Summary
+      - name: Publish Harness & Test Results to Job Summary
         if: always()
         run: |
+          if [ -f harness/reports/harness_report.md ]; then
+            cat harness/reports/harness_report.md >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
           echo "## 📊 Backend Integration & 2FA Test Suite Report" >> $GITHUB_STEP_SUMMARY
           echo '```text' >> $GITHUB_STEP_SUMMARY
           if [ -f ci_backend.log ]; then
@@ -207,6 +211,15 @@ jobs:
             echo "No log generated." >> $GITHUB_STEP_SUMMARY
           fi
           echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload Harness Verification Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: harness-reports
+          path: harness/reports/
+          retention-days: 14
+          if-no-files-found: ignore
 
       - name: Upload Test Execution Log
         if: always()
