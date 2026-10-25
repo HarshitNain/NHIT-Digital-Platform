@@ -1309,6 +1309,8 @@ class InitiateApprovalRequest(StrictBaseModel):
 
 @app.get("/api/v1/health", tags=["🔧 System"], summary="Health Check",
          description="Returns system health status with database connectivity check and service metadata.")
+@app.get("/health", include_in_schema=False)
+@app.get("/healthz", include_in_schema=False)
 async def health():
     try:
         rows = query_db("SELECT 1 AS ok")
