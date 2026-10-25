@@ -274,6 +274,47 @@ CREATE TABLE IF NOT EXISTS projects (
 );
 
 -- ================================================
+-- GREEN NOTE & PAYMENT NOTE SERVICES TABLES (SEC-011)
+-- ================================================
+
+CREATE TABLE IF NOT EXISTS green_notes (
+    id VARCHAR(64) PRIMARY KEY,
+    sl_no VARCHAR(64) UNIQUE,
+    project_name VARCHAR(255) NOT NULL,
+    supplier_name VARCHAR(255) NOT NULL,
+    amount NUMERIC(15, 2) NOT NULL DEFAULT 0.00,
+    status VARCHAR(32) NOT NULL DEFAULT 'DRAFT',
+    created_by VARCHAR(255) DEFAULT 'System User',
+    remarks TEXT,
+    payload JSONB,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS payment_notes (
+    id SERIAL PRIMARY KEY,
+    payment_note_number VARCHAR(64) UNIQUE,
+    green_note_id VARCHAR(64),
+    vendor_name VARCHAR(255) NOT NULL,
+    vendor_account_number VARCHAR(64),
+    bank_name VARCHAR(255),
+    ifsc_code VARCHAR(20),
+    gross_amount NUMERIC(15, 2) NOT NULL DEFAULT 0.00,
+    tds_amount NUMERIC(15, 2) NOT NULL DEFAULT 0.00,
+    net_payable_amount NUMERIC(15, 2) NOT NULL DEFAULT 0.00,
+    status VARCHAR(32) NOT NULL DEFAULT 'D',
+    utr_no VARCHAR(64),
+    utr_date VARCHAR(64),
+    hold_reason TEXT,
+    remarks TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_green_notes_status ON green_notes(status);
+CREATE INDEX IF NOT EXISTS idx_payment_notes_status ON payment_notes(status);
+
+-- ================================================
 -- INDEXES FOR PERFORMANCE
 -- ================================================
 

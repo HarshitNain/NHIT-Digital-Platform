@@ -32,6 +32,7 @@ import os
 import py_compile
 import re
 import secrets
+import shutil
 import subprocess
 import sys
 import threading
@@ -394,8 +395,8 @@ def check_runtime_environment(reporter: HarnessReporter):
         reporter.record("Node.js Runtime", False, "Node.js not found in PATH", critical=False, recovery_hint="Install Node.js 20+ from nodejs.org")
 
     try:
-        npm_cmd = ["cmd", "/c", "npm", "--version"] if sys.platform == "win32" else ["npm", "--version"]
-        npm_res = subprocess.run(npm_cmd, capture_output=True, text=True, timeout=5, shell=False)
+        npm_path = shutil.which("npm") or ("npm.cmd" if sys.platform == "win32" else "npm")
+        npm_res = subprocess.run([npm_path, "--version"], capture_output=True, text=True, timeout=10, shell=(sys.platform == "win32"))
         npm_ver = npm_res.stdout.strip() if npm_res.returncode == 0 else "Unknown"
         reporter.record(f"NPM Package Manager ({npm_ver})", npm_res.returncode == 0, critical=False)
     except Exception:

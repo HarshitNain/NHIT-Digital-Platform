@@ -1,0 +1,99 @@
+# =============================================================================
+# NHIT Digital Platform — Render Blueprint (render.yaml)
+# =============================================================================
+# One-click deploy for Render.com:
+#   1. PostgreSQL 15 managed database (free tier, auto-migrated)
+#   2. FastAPI backend web service (free tier + GitHub auto-deploy)
+#
+# Deploy steps:
+#   1. Fork/push this repo to GitHub
+#   2. Go to render.com → New → Blueprint
+#   3. Connect your GitHub repo → Render reads this file
+#   4. Fill in required env var values flagged as sync: false
+# =============================================================================
+
+databases:
+  - name: nhit-postgres
+    databaseName: nhit_db
+    user: postgres
+    plan: free                  # Free: 1 GB storage, expires after 90 days
+    # ⚠️ FREE TIER NOTE: Render free PostgreSQL expires after 90 days.
+    # You must recreate and re-run migrations to continue for free.
+    # Alternatively, use Supabase (see FREE_DEPLOYMENT_GUIDE.md).
+
+services:
+  - type: web
+    name: nhit-api-gateway
+    runtime: python
+    plan: free                  # Free: 750 hrs/month, spins down after 15min idle
+    rootDir: NHIT Backend
+    buildCommand: pip install --no-cache-dir -r requirements.txt
+    startCommand: python gateway_swagger.py
+    healthCheckPath: /health
+
+    # ─── Auto-Deploy ────────────────────────────────────────────────────────
+    autoDeploy: true            # Auto-deploy on every push to the GitHub branch
+    branch: main
+
+    # ─── Environment Variables ───────────────────────────────────────────────
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+
+      # Database — linked to the nhit-postgres database above
+      - key: DB_HOST
+        fromDatabase:
+          name: nhit-postgres
+          property: host
+      - key: DB_PORT
+        fromDatabase:
+          name: nhit-postgres
+          property: port
+      - key: DB_NAME
+        fromDatabase:
+          name: nhit-postgres
+          property: database
+      - key: DB_USER
+        fromDatabase:
+          name: nhit-postgres
+          property: user
+      - key: DB_PASSWORD
+        fromDatabase:
+          name: nhit-postgres
+          property: password
+
+      # CORS — set to your Vercel frontend URL after it is deployed
+      - key: CORS_ORIGINS
+        value: https://nhit-frontend.vercel.app  # ← Update this after Vercel deploy
+
+      # Security — required secrets (fill in Render dashboard)
+      - key: JWT_SECRET
+        sync: false              # ⚠️ REQUIRED: Set in Render Dashboard
+
+      # Email / OTP (optional — OTP features need at least one of these)
+      - key: RESEND_API_KEY
+        sync: false              # Optional: Resend.com API key for OTP emails
+      - key: EMAIL_SENDER
+        value: onboarding@resend.dev  # Update to your verified Resend sender
+      - key: SMTP_HOST
+        value: smtp.gmail.com
+      - key: SMTP_PORT
+        value: 465
+      - key: SMTP_USER
+        sync: false              # Optional: Gmail address
+      - key: SMTP_PASSWORD
+        sync: false              # Optional: Gmail App Password
+
+      # Rate limiting (safe defaults, tunable via env)
+      - key: RATE_LIMIT_AUTH_MAX
+        value: 5
+      - key: RATE_LIMIT_AUTH_WINDOW
+        value: 60
+      - key: RATE_LIMIT_PUBLIC_MAX
+        value: 60
+      - key: RATE_LIMIT_USER_MAX
+        value: 180
+
+      # File uploads
+      - key: MAX_UPLOAD_SIZE_MB
+        value: 10

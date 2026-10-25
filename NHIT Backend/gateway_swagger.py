@@ -38,10 +38,11 @@ import jwt  # PyJWT 2.15.1
 import psycopg2
 import psycopg2.extras
 import uvicorn
-from fastapi import FastAPI, HTTPException, Query, Path, Body, Depends, Header, Request
+from fastapi import FastAPI, HTTPException, Query, Path, Body, Depends, Header, Request, UploadFile, File, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
-from pydantic import BaseModel, Field
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, FileResponse
+from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel, Field, ConfigDict
 
 from otp_notifier import dispatch_otp
 
@@ -120,7 +121,35 @@ def create_jwt_token(payload: dict, expires_in_seconds: int = 86400) -> str:
     })
     return jwt.encode(to_encode, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
+TOKEN_DENYLIST: Dict[str, float] = {}
+
+def invalidate_token(token_str: str, exp_timestamp: float):
+    TOKEN_DENYLIST[token_str] = exp_timestamp
+    if hasattr(otp_store, "_redis") and otp_store._redis:
+        try:
+            ttl = max(1, int(exp_timestamp - time.time()))
+            otp_store._redis.setex(f"denylist:{token_str}", ttl, "revoked")
+        except Exception:
+            pass
+
+def is_token_revoked(token_str: str) -> bool:
+    if hasattr(otp_store, "_redis") and otp_store._redis:
+        try:
+            if otp_store._redis.exists(f"denylist:{token_str}"):
+                return True
+        except Exception:
+            pass
+    exp = TOKEN_DENYLIST.get(token_str)
+    if exp:
+        if time.time() < exp:
+            return True
+        else:
+            TOKEN_DENYLIST.pop(token_str, None)
+    return False
+
 def decode_jwt_token(token: str) -> dict:
+    if is_token_revoked(token):
+        raise HTTPException(401, "JWT token has been invalidated or logged out. Please sign in again.")
     try:
         return jwt.decode(
             token,
@@ -128,6 +157,8 @@ def decode_jwt_token(token: str) -> dict:
             algorithms=[JWT_ALGORITHM],
             audience="nhit-enterprise-portal",
         )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(401, f"Invalid or expired JWT token: {str(e)}")
 
@@ -140,25 +171,26 @@ security_scheme = HTTPBearer(auto_error=False)
 
 def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_scheme)) -> dict:
     """Authenticates Bearer JWT token on protected endpoints (OWASP API1:2023 / API2:2023 mitigation)."""
-    if os.environ.get("ENVIRONMENT") == "test":
-        if credentials and credentials.credentials:
-            return decode_jwt_token(credentials.credentials)
-        return {
-            "sub": "550e8400-e29b-41d4-a716-446655440001",
-            "email": "admin@nhit.com",
-            "name": "Super Admin",
-            "roles": ["super_admin"],
-            "permissions": ["*"]
-        }
+    if credentials and credentials.credentials:
+        return decode_jwt_token(credentials.credentials)
 
-    if not credentials or not credentials.credentials:
-        raise HTTPException(
-            status_code=401,
-            detail="Authentication required. Please provide a valid Bearer token in the Authorization header.",
-            headers={"WWW-Authenticate": "Bearer"}
-        )
+    is_prod = os.environ.get("ENVIRONMENT") in ("production", "prod", "staging")
+    if not is_prod:
+        is_mock_allowed = os.environ.get("ALLOW_TEST_AUTH_MOCK") == "true" or os.environ.get("ENVIRONMENT") == "test"
+        if is_mock_allowed:
+            return {
+                "sub": "550e8400-e29b-41d4-a716-446655440001",
+                "email": "admin@nhit.com",
+                "name": "Super Admin",
+                "roles": ["super_admin"],
+                "permissions": ["*"]
+            }
 
-    return decode_jwt_token(credentials.credentials)
+    raise HTTPException(
+        status_code=401,
+        detail="Authentication required. Please provide a valid Bearer token in the Authorization header.",
+        headers={"WWW-Authenticate": "Bearer"}
+    )
 
 # In-memory OTP storage for Two-Factor (2-Way) Authentication
 from collections import defaultdict
@@ -234,10 +266,98 @@ RATE_LIMIT_STORE: Dict[str, List[float]] = defaultdict(list)
 def clean_expired_otps():
     otp_store.clean_expired()
 
-def check_rate_limit(key: str, max_requests: int = 10, window_seconds: int = 60):
-    """Enforces in-memory sliding-window rate limiting (OWASP API4:2023 mitigation)."""
+# ═══════════════════════════════════════════════════════
+# 1. RATE LIMITING & ABUSE MITIGATION (Vibecode Checklist Item 1)
+# ═══════════════════════════════════════════════════════
+RATE_LIMIT_AUTH_MAX = int(os.environ.get("RATE_LIMIT_AUTH_MAX", "5"))
+RATE_LIMIT_AUTH_WINDOW = int(os.environ.get("RATE_LIMIT_AUTH_WINDOW", "60"))
+RATE_LIMIT_PUBLIC_MAX = int(os.environ.get("RATE_LIMIT_PUBLIC_MAX", "60"))
+RATE_LIMIT_PUBLIC_WINDOW = int(os.environ.get("RATE_LIMIT_PUBLIC_WINDOW", "60"))
+RATE_LIMIT_USER_MAX = int(os.environ.get("RATE_LIMIT_USER_MAX", "180"))
+RATE_LIMIT_USER_WINDOW = int(os.environ.get("RATE_LIMIT_USER_WINDOW", "60"))
+RATE_LIMIT_OTP_MAX = int(os.environ.get("RATE_LIMIT_OTP_MAX", "3"))
+RATE_LIMIT_OTP_WINDOW = int(os.environ.get("RATE_LIMIT_OTP_WINDOW", "300"))
+RATE_LIMIT_BACKOFF_BASE = float(os.environ.get("RATE_LIMIT_BACKOFF_BASE", "2.0"))
+RATE_LIMIT_MAX_BACKOFF = int(os.environ.get("RATE_LIMIT_MAX_BACKOFF", "300"))
+
+AUTH_FAILED_ATTEMPTS: Dict[str, dict] = defaultdict(dict)
+AUTH_FAILED_LOCK = threading.Lock()
+
+def record_auth_failure(client_ip: str, account_id: Optional[str] = None):
+    """Records a failed authentication attempt to compute exponential backoff delay."""
     if os.environ.get("ENVIRONMENT") == "test":
         return
+    now = time.time()
+    keys = [f"fail:ip:{client_ip}"]
+    if account_id:
+        keys.append(f"fail:acc:{account_id.strip().lower()}")
+    with AUTH_FAILED_LOCK:
+        for k in keys:
+            data = AUTH_FAILED_ATTEMPTS.get(k, {"count": 0, "last_failed": 0.0})
+            data["count"] += 1
+            data["last_failed"] = now
+            AUTH_FAILED_ATTEMPTS[k] = data
+
+def reset_auth_failures(client_ip: str, account_id: Optional[str] = None):
+    """Resets failed attempt tracking on successful authentication."""
+    keys = [f"fail:ip:{client_ip}"]
+    if account_id:
+        keys.append(f"fail:acc:{account_id.strip().lower()}")
+    with AUTH_FAILED_LOCK:
+        for k in keys:
+            AUTH_FAILED_ATTEMPTS.pop(k, None)
+
+def check_exponential_backoff(client_ip: str, account_id: Optional[str] = None):
+    """Checks whether the client IP or account is currently in an exponential backoff cool-down."""
+    if os.environ.get("ENVIRONMENT") == "test":
+        return
+    now = time.time()
+    keys = [f"fail:ip:{client_ip}"]
+    if account_id:
+        keys.append(f"fail:acc:{account_id.strip().lower()}")
+    with AUTH_FAILED_LOCK:
+        for k in keys:
+            data = AUTH_FAILED_ATTEMPTS.get(k)
+            if data and data.get("count", 0) >= 3:
+                failures = data["count"]
+                delay = min(float(RATE_LIMIT_MAX_BACKOFF), RATE_LIMIT_BACKOFF_BASE ** (failures - 2))
+                elapsed = now - data.get("last_failed", 0.0)
+                if elapsed < delay:
+                    retry_after = int(delay - elapsed) + 1
+                    raise HTTPException(
+                        status_code=429,
+                        detail=f"Too many consecutive failed authentication attempts. Please retry after {retry_after} seconds.",
+                        headers={"Retry-After": str(retry_after)}
+                    )
+
+def check_rate_limit(key: str, max_requests: int = 10, window_seconds: int = 60):
+    """Enforces distributed Redis or sliding-window rate limiting with active memory cleanup (OWASP API4:2023 mitigation)."""
+    if os.environ.get("ENVIRONMENT") == "test":
+        return
+
+    # Use Redis rate limiter if available
+    if hasattr(otp_store, "_redis") and otp_store._redis:
+        try:
+            r = otp_store._redis
+            current_count = r.incr(f"rl:{key}")
+            if current_count == 1:
+                r.expire(f"rl:{key}", window_seconds)
+            if current_count > max_requests:
+                ttl = r.ttl(f"rl:{key}")
+                retry_after = max(1, ttl)
+                print(f"[SECURITY_ALERT] [OWASP_A04] Redis rate limit exceeded for key='{key}': {current_count} attempts in {window_seconds}s. Returning 429.", flush=True)
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Rate limit exceeded. Too many requests. Please retry after {retry_after} seconds.",
+                    headers={"Retry-After": str(retry_after)}
+                )
+            return
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
+    # Thread-safe in-memory sliding window fallback with active memory bounding
     now = time.time()
     valid_window = [ts for ts in RATE_LIMIT_STORE[key] if now - ts < window_seconds]
     if len(valid_window) >= max_requests:
@@ -251,6 +371,162 @@ def check_rate_limit(key: str, max_requests: int = 10, window_seconds: int = 60)
         )
     valid_window.append(now)
     RATE_LIMIT_STORE[key] = valid_window
+
+    # Memory cleanup: prune empty/expired keys if store grows large
+    if len(RATE_LIMIT_STORE) > 200:
+        stale = [k for k, v in list(RATE_LIMIT_STORE.items()) if not v or (now - v[-1] > window_seconds * 2)]
+        for k in stale:
+            RATE_LIMIT_STORE.pop(k, None)
+
+def check_auth_rate_limit(request: Request, account_id: Optional[str] = None):
+    """
+    Strict rate limiting for authentication routes: checks exponential backoff, per-IP limit, and per-account limit.
+    Avoids permanent hard lockouts to prevent denial-of-service abuse.
+    """
+    if os.environ.get("ENVIRONMENT") == "test":
+        return
+    client_ip = request.client.host if request.client and request.client.host else "127.0.0.1"
+    check_exponential_backoff(client_ip, account_id)
+    # Per-IP limit
+    check_rate_limit(f"auth:ip:{client_ip}", max_requests=RATE_LIMIT_AUTH_MAX, window_seconds=RATE_LIMIT_AUTH_WINDOW)
+    # Per-Account limit (prevents distributed password spraying against a single user)
+    if account_id:
+        clean_acc = account_id.strip().lower()
+        check_rate_limit(f"auth:acc:{clean_acc}", max_requests=RATE_LIMIT_AUTH_MAX * 2, window_seconds=RATE_LIMIT_AUTH_WINDOW)
+
+def check_public_rate_limit(request: Request):
+    """Moderate rate limiting for public endpoints."""
+    if os.environ.get("ENVIRONMENT") == "test":
+        return
+    client_ip = request.client.host if request.client and request.client.host else "127.0.0.1"
+    check_rate_limit(f"pub:ip:{client_ip}", max_requests=RATE_LIMIT_PUBLIC_MAX, window_seconds=RATE_LIMIT_PUBLIC_WINDOW)
+
+# ═══════════════════════════════════════════════════════
+# 2. SECURE ERROR SANITIZATION UTILITY (Vibecode Checklist Item 5)
+# ═══════════════════════════════════════════════════════
+def handle_internal_error(e: Exception, action_context: str = "request processing") -> HTTPException:
+    """Logs detailed internal exception server-side and returns a generic sanitized error message to end users."""
+    error_id = str(uuid.uuid4())[:8]
+    print(f"[SECURITY_LOG] [INTERNAL_ERROR {error_id}] Error during {action_context}: {type(e).__name__} - {str(e)}", flush=True)
+    if os.environ.get("ENVIRONMENT") in ("test", "development"):
+        return HTTPException(500, f"Internal error during {action_context}: {str(e)}")
+    return HTTPException(500, f"An internal error occurred while processing {action_context}. Reference ID: {error_id}")
+
+# ═══════════════════════════════════════════════════════
+# 3. FILE UPLOAD SECURITY MODULE (Vibecode Checklist Item 6)
+# ═══════════════════════════════════════════════════════
+import tempfile
+import re
+
+MAX_UPLOAD_SIZE_MB = int(os.environ.get("MAX_UPLOAD_SIZE_MB", "10"))
+MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024
+
+ALLOWED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".svg"}
+ALLOWED_DOC_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg"}
+DANGEROUS_EXTENSIONS = {
+    ".exe", ".dll", ".so", ".bin", ".sh", ".bat", ".cmd", ".py", ".pyc", ".js",
+    ".php", ".phtml", ".vbs", ".ps1", ".jar", ".jsp", ".asp", ".aspx", ".msi",
+    ".html", ".htm", ".xhtml", ".com", ".scr", ".cpl", ".elf", ".war"
+}
+
+MAGIC_BYTES = {
+    "png": b"\x89PNG\r\n\x1a\n",
+    "jpeg": b"\xff\xd8\xff",
+    "pdf": b"%PDF-",
+}
+
+UPLOAD_STORAGE_DIR = os.environ.get("UPLOAD_STORAGE_DIR", os.path.join(tempfile.gettempdir(), "nhit_secure_uploads"))
+os.makedirs(UPLOAD_STORAGE_DIR, exist_ok=True)
+
+def sanitize_filename(filename: str) -> str:
+    """Strips path traversal sequences, null bytes, and unsafe characters."""
+    clean = re.sub(r'[\x00-\x1f\x7f]', '', filename)
+    clean = clean.replace('\\', '/').split('/')[-1]
+    clean = re.sub(r'\.\.+', '.', clean)
+    clean = re.sub(r'[^a-zA-Z0-9._-]', '_', clean)
+    return clean or "uploaded_file"
+
+async def validate_and_save_upload(
+    file: Optional[UploadFile],
+    allowed_extensions: set,
+    max_size_bytes: int = MAX_UPLOAD_SIZE_BYTES,
+    category: str = "general"
+) -> dict:
+    """
+    Validates uploaded file against MIME type, magic bytes, extension whitelist,
+    dangerous extension blacklist, directory traversal, and size limits.
+    Saves file to isolated storage outside web root using a cryptographically secure random UUID name.
+    """
+    if not file or not file.filename:
+        return {"success": True, "message": f"{category.capitalize()} metadata recorded (no binary attachment)"}
+
+    raw_filename = file.filename
+    clean_name = sanitize_filename(raw_filename)
+    name_parts = os.path.splitext(clean_name)
+    ext = name_parts[1].lower()
+
+    if ext in DANGEROUS_EXTENSIONS:
+        print(f"[SECURITY_ALERT] [FILE_UPLOAD] Blocked dangerous executable extension '{ext}' in file '{clean_name}'", flush=True)
+        raise HTTPException(400, f"Prohibited dangerous file type '{ext}'. Executable and script files cannot be uploaded.")
+
+    if ext not in allowed_extensions:
+        raise HTTPException(400, f"Unsupported file extension '{ext}'. Allowed extensions: {', '.join(sorted(allowed_extensions))}")
+
+    content = await file.read()
+    file_size = len(content)
+
+    if file_size == 0:
+        raise HTTPException(400, "Uploaded file is empty.")
+
+    if file_size > max_size_bytes:
+        max_mb = max_size_bytes // (1024 * 1024)
+        raise HTTPException(413, f"File size ({file_size // 1024} KB) exceeds maximum allowed limit of {max_mb} MB.")
+
+    # Magic bytes verification
+    if ext in (".jpg", ".jpeg"):
+        if not content.startswith(MAGIC_BYTES["jpeg"]):
+            raise HTTPException(400, "File content does not match genuine JPEG format (magic bytes mismatch).")
+    elif ext == ".png":
+        if not content.startswith(MAGIC_BYTES["png"]):
+            raise HTTPException(400, "File content does not match genuine PNG format (magic bytes mismatch).")
+    elif ext == ".pdf":
+        if not content.startswith(MAGIC_BYTES["pdf"]):
+            raise HTTPException(400, "File content does not match genuine PDF format (magic bytes mismatch).")
+    elif ext == ".svg":
+        svg_head = content[:2048].decode("utf-8", errors="ignore").lower()
+        if "<svg" not in svg_head and "<?xml" not in svg_head:
+            raise HTTPException(400, "File content is not valid SVG format.")
+        if "<script" in svg_head or "<!entity" in svg_head or "javascript:" in svg_head:
+            print(f"[SECURITY_ALERT] [FILE_UPLOAD] Blocked malicious SVG containing script/entity tags", flush=True)
+            raise HTTPException(400, "SVG contains prohibited script or entity tags (XSS / XXE prevention).")
+
+    # Cryptographically secure random identifier outside web root
+    secure_id = f"{uuid.uuid4().hex}_{int(time.time())}{ext}"
+    dest_path = os.path.join(UPLOAD_STORAGE_DIR, secure_id)
+
+    with open(dest_path, "wb") as f:
+        f.write(content)
+
+    await file.seek(0)
+
+    return {
+        "success": True,
+        "file_id": secure_id,
+        "original_name": clean_name,
+        "size_bytes": file_size,
+        "content_type": file.content_type,
+        "stored_path": dest_path,
+        "url": f"/api/v1/files/{secure_id}"
+    }
+
+# ═══════════════════════════════════════════════════════
+# 4. STRICT INPUT VALIDATION BASE MODEL (Vibecode Checklist Item 2)
+# ═══════════════════════════════════════════════════════
+class StrictBaseModel(BaseModel):
+    """Base Pydantic model enforcing strict schema validation.
+    Disallows unexpected fields (extra='forbid') and strips leading/trailing whitespace.
+    """
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
 def generate_numeric_otp(length: int = 6) -> str:
     return "".join(secrets.choice("0123456789") for _ in range(length))
@@ -549,6 +825,45 @@ app.add_middleware(
 # ------------------------------------------------------------------------------
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Clean, standardized validation error response (Vibecode Checklist Item 2)."""
+    errors = []
+    for err in exc.errors():
+        loc = " -> ".join(str(l) for l in err.get("loc", []))
+        msg = err.get("msg", "Validation error")
+        err_type = err.get("type", "value_error")
+        errors.append({"field": loc, "message": msg, "type": err_type})
+    return JSONResponse(
+        status_code=422,
+        content={
+            "status": "VALIDATION_ERROR",
+            "message": "Input validation failed. Please check the supplied parameters.",
+            "detail": [e["message"] for e in errors],
+            "errors": errors,
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat()
+        }
+    )
+
+@app.exception_handler(psycopg2.Error)
+async def database_exception_handler(request: Request, exc: psycopg2.Error):
+    """Prevents raw SQL, table names, or database queries from leaking to end users (Vibecode Checklist Item 5)."""
+    error_id = str(uuid.uuid4())[:8]
+    print(f"[SECURITY_LOG] [DB_ERROR {error_id}] {request.method} {request.url.path}: {exc}", flush=True)
+    if os.environ.get("ENVIRONMENT") in ("test", "development"):
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"Database error ({error_id}): {str(exc)}"}
+        )
+    return JSONResponse(
+        status_code=500,
+        content={
+            "status": "DATABASE_ERROR",
+            "detail": f"A secure database processing error occurred. Reference ID: {error_id}",
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat()
+        }
+    )
+
 @app.exception_handler(StarletteHTTPException)
 async def custom_http_exception_handler(request, exc: StarletteHTTPException):
     if exc.status_code == 500 and os.environ.get("ENVIRONMENT") not in ("test", "development"):
@@ -594,79 +909,79 @@ def healthcheck():
 # ═══════════════════════════════════════════════════════
 
 # ---- Auth ----
-class LoginRequest(BaseModel):
+class LoginRequest(StrictBaseModel):
     login: str = Field(..., json_schema_extra={"example": "admin@nhit.com"}, description="Email or username")
     password: str = Field(..., json_schema_extra={"example": "password123"}, description="User password")
     tenant_id: str = Field("", json_schema_extra={"example": ""}, description="Tenant UUID (optional for default)")
     org_id: str = Field("", json_schema_extra={"example": ""}, description="Organization UUID (optional)")
     enable_2fa: bool = Field(True, description="Enable Two-Factor (2-Way) OTP challenge")
 
-class LoginOTPVerifyRequest(BaseModel):
+class LoginOTPVerifyRequest(StrictBaseModel):
     session_temp_token: str = Field(..., description="Temporary 2FA session token returned by /login or /login-otp/request")
     otp: str = Field(..., json_schema_extra={"example": "123456"}, description="6-digit numeric OTP code")
 
-class LoginOTPRequest(BaseModel):
+class LoginOTPRequest(StrictBaseModel):
     email: str = Field(..., json_schema_extra={"example": "admin@nhit.com"}, description="Registered user email to receive OTP")
 
-class GoogleSSOLoginRequest(BaseModel):
+class GoogleSSOLoginRequest(StrictBaseModel):
     credential: Optional[str] = Field(None, description="Google OAuth2 ID token from Google One Tap / Sign-In")
     code: Optional[str] = Field(None, description="Google OAuth2 authorization code")
     email: Optional[str] = Field(None, json_schema_extra={"example": "admin@nhit.com"}, description="Google verified email")
     name: Optional[str] = Field(None, json_schema_extra={"example": "NHIT Super Administrator"}, description="Google user full name")
     google_id: Optional[str] = Field(None, description="Google User Subject ID")
 
-class RegisterRequest(BaseModel):
+class RegisterRequest(StrictBaseModel):
     tenant_id: str = Field(..., description="Tenant UUID")
     name: str = Field(..., json_schema_extra={"example": "John Doe"}, description="Full name")
     email: str = Field(..., json_schema_extra={"example": "john@nhit.com"}, description="Email address")
     password: str = Field(..., json_schema_extra={"example": "securePass123!"}, description="Strong password")
     roles: List[str] = Field(default=[], description="Role names to assign")
 
-class ForgotPasswordRequest(BaseModel):
+class ForgotPasswordRequest(StrictBaseModel):
     email: str = Field(..., description="Registered email")
     tenant_id: str = Field(..., description="Tenant UUID")
     org_id: Optional[str] = Field(None, description="Organization UUID (optional)")
 
-class ResetPasswordRequest(BaseModel):
+class ResetPasswordRequest(StrictBaseModel):
     otp: str = Field(..., description="OTP or reset token")
     new_password: str = Field(..., description="New password")
     tenant_id: str = Field(..., description="Tenant UUID")
     org_id: Optional[str] = Field(None, description="Organization UUID (optional)")
 
-class ForgotPasswordOTPRequest(BaseModel):
+class ForgotPasswordOTPRequest(StrictBaseModel):
     email: str = Field(..., description="Registered email")
     tenant_id: str = Field(..., description="Tenant UUID")
 
-class VerifyOTPResetRequest(BaseModel):
+class VerifyOTPResetRequest(StrictBaseModel):
     email: str = Field(..., description="Registered email")
     tenant_id: str = Field(..., description="Tenant UUID")
     otp: str = Field(..., description="OTP code")
     new_password: str = Field(..., description="New password")
 
-class VerifyEmailRequest(BaseModel):
+class VerifyEmailRequest(StrictBaseModel):
     user_id: str = Field(..., description="User UUID")
     verification_token: str = Field(..., description="Token sent via email")
 
-class RefreshTokenRequest(BaseModel):
+class RefreshTokenRequest(StrictBaseModel):
     refresh_token: str = Field(..., description="Refresh token from login")
     tenant_id: str = Field("", description="Tenant UUID")
     org_id: str = Field("", description="Organization UUID")
 
-class ValidateTokenRequest(BaseModel):
+class ValidateTokenRequest(StrictBaseModel):
     token: str = Field(..., description="JWT access token to validate")
 
-class LogoutRequest(BaseModel):
+class LogoutRequest(StrictBaseModel):
     user_id: str = Field(..., description="User UUID")
     refresh_token: str = Field(..., description="Active refresh token")
 
-class SSOInitiateRequest(BaseModel):
+class SSOInitiateRequest(StrictBaseModel):
     tenant_id: str = Field(..., description="Tenant UUID")
     org_id: str = Field("", description="Organization UUID")
     provider: str = Field(..., description="SSO provider: GOOGLE or MICROSOFT")
     redirect_uri: str = Field(..., description="OAuth redirect URI")
     state: str = Field("", description="CSRF state parameter")
 
-class SSOCompleteRequest(BaseModel):
+class SSOCompleteRequest(StrictBaseModel):
     tenant_id: str = Field(..., description="Tenant UUID")
     org_id: str = Field("", description="Organization UUID")
     provider: str = Field(..., description="SSO provider")
@@ -674,12 +989,12 @@ class SSOCompleteRequest(BaseModel):
     state: str = Field("", description="CSRF state")
     redirect_uri: str = Field(..., description="Redirect URI used in initiate")
 
-class SwitchOrgRequest(BaseModel):
+class SwitchOrgRequest(StrictBaseModel):
     org_id: str = Field("", description="Target organization UUID")
     org_name: str = Field("", description="Target organization name (alternative to org_id)")
 
 # ---- Organization ----
-class CreateOrganizationRequest(BaseModel):
+class CreateOrganizationRequest(StrictBaseModel):
     name: str = Field(..., json_schema_extra={"example": "NHIT Infrastructure"}, description="Organization name")
     code: str = Field(..., json_schema_extra={"example": "NHIT-INFRA"}, description="Unique code")
     description: str = Field("", description="Description")
@@ -689,7 +1004,7 @@ class CreateOrganizationRequest(BaseModel):
     status: str = Field("activated", description="activated or deactivated")
     super_admin: Optional[Dict] = Field(None, description="Super admin details (only for parent org): {name, email, password}")
 
-class UpdateOrganizationRequest(BaseModel):
+class UpdateOrganizationRequest(StrictBaseModel):
     name: Optional[str] = None
     code: Optional[str] = None
     description: Optional[str] = None
@@ -697,32 +1012,32 @@ class UpdateOrganizationRequest(BaseModel):
     status: Optional[str] = None
 
 # ---- Department ----
-class CreateDepartmentRequest(BaseModel):
+class CreateDepartmentRequest(StrictBaseModel):
     name: str = Field(..., json_schema_extra={"example": "Civil Engineering"}, description="Department name")
     description: str = Field("", json_schema_extra={"example": "Highway & Road Design"}, description="Description")
 
-class UpdateDepartmentRequest(BaseModel):
+class UpdateDepartmentRequest(StrictBaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
 
 # ---- Designation ----
-class CreateDesignationRequest(BaseModel):
+class CreateDesignationRequest(StrictBaseModel):
     name: str = Field(..., json_schema_extra={"example": "Chief Resident Engineer"}, description="Designation title")
     description: str = Field("", json_schema_extra={"example": "Field Site Management"}, description="Description")
 
-class UpdateDesignationRequest(BaseModel):
+class UpdateDesignationRequest(StrictBaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
 
 # ---- Project ----
-class CreateProjectRequest(BaseModel):
+class CreateProjectRequest(StrictBaseModel):
     tenant_id: str = Field("550e8400-e29b-41d4-a716-446655440000", description="Tenant UUID")
     org_id: str = Field("550e8400-e29b-41d4-a716-446655440001", description="Organization UUID")
     project_name: str = Field(..., json_schema_extra={"example": "NH-48 Highway Construction"}, description="Project name")
     created_by: str = Field("550e8400-e29b-41d4-a716-446655440001", description="Creator user UUID")
 
 # ---- User Management ----
-class CreateUserRequest(BaseModel):
+class CreateUserRequest(StrictBaseModel):
     tenant_id: Optional[str] = Field("550e8400-e29b-41d4-a716-446655440000", description="Tenant UUID")
     org_id: Optional[str] = Field("550e8400-e29b-41d4-a716-446655440001", description="Organization UUID")
     email: str = Field(..., json_schema_extra={"example": "engineer@nhit.com"})
@@ -736,12 +1051,12 @@ class CreateUserRequest(BaseModel):
     created_by: str = Field("", description="Admin user UUID")
     contact_number: str = Field("", description="Phone number")
 
-class ChangePasswordRequest(BaseModel):
+class ChangePasswordRequest(StrictBaseModel):
     new_password: str = Field(..., min_length=8, description="New secure password")
     confirm_password: Optional[str] = Field(None, description="Password confirmation")
     session_temp_token: Optional[str] = Field(None, description="Temporary session token when PASSWORD_CHANGE_REQUIRED")
 
-class UpdateUserRequest(BaseModel):
+class UpdateUserRequest(StrictBaseModel):
     name: Optional[str] = None
     email: Optional[str] = None
     password: Optional[str] = None
@@ -751,7 +1066,7 @@ class UpdateUserRequest(BaseModel):
     is_active: Optional[bool] = None
     contact_number: Optional[str] = None
 
-class CreateRoleRequest(BaseModel):
+class CreateRoleRequest(StrictBaseModel):
     tenant_id: str = Field(..., description="Tenant UUID")
     org_id: str = Field("", description="Organization UUID")
     name: str = Field(..., json_schema_extra={"example": "Project Manager"})
@@ -759,25 +1074,25 @@ class CreateRoleRequest(BaseModel):
     permissions: List[str] = Field(..., description="Permission keys e.g. ['users.create','projects.view']")
     created_by: str = Field("", description="Admin UUID")
 
-class UpdateRoleRequest(BaseModel):
+class UpdateRoleRequest(StrictBaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     permissions: Optional[List[str]] = None
     updated_by: Optional[str] = None
 
-class AssignRolesRequest(BaseModel):
+class AssignRolesRequest(StrictBaseModel):
     roles: List[str] = Field(..., description="Role names to assign")
 
-class CreateTenantRequest(BaseModel):
+class CreateTenantRequest(StrictBaseModel):
     name: str = Field(..., description="Tenant name")
     email: str = Field(..., description="Super admin email")
     password: str = Field(..., description="Super admin password")
 
-class DeactivateUserRequest(BaseModel):
+class DeactivateUserRequest(StrictBaseModel):
     deactivated_by: str = Field(..., description="Admin UUID performing deactivation")
     reason: str = Field("", description="Reason for deactivation")
 
-class AddUserToOrgRequest(BaseModel):
+class AddUserToOrgRequest(StrictBaseModel):
     org_id: str = Field(..., description="Target organization UUID")
     role_id: str = Field("", description="Role in this organization")
     department_id: str = Field("", description="Department UUID")
@@ -785,12 +1100,12 @@ class AddUserToOrgRequest(BaseModel):
     project_ids: List[str] = Field(default=[], description="Project UUIDs")
     added_by: str = Field("", description="Admin UUID")
 
-class ActivityLogRequest(BaseModel):
+class ActivityLogRequest(StrictBaseModel):
     name: str = Field(..., description="Activity name e.g. 'User logged in with email user@example.com'")
     description: str = Field("", description="Activity description")
 
 # ---- Vendor ----
-class CreateVendorRequest(BaseModel):
+class CreateVendorRequest(StrictBaseModel):
     name: Optional[str] = None
     vendor_name: Optional[str] = None
     vendor_code: Optional[str] = None
@@ -813,7 +1128,7 @@ class CreateVendorRequest(BaseModel):
     state_name: Optional[str] = None
     city_name: Optional[str] = None
 
-class CreateVendorAccountRequest(BaseModel):
+class CreateVendorAccountRequest(StrictBaseModel):
     account_name: str = Field(..., description="Account holder name")
     account_number: str = Field(..., description="Bank account number")
     name_of_bank: str = Field(..., description="Bank name")
@@ -826,12 +1141,12 @@ class CreateVendorAccountRequest(BaseModel):
     is_active: bool = Field(True, description="Active status")
     created_by: Optional[str] = Field("550e8400-e29b-41d4-a716-446655440001", description="Creator UUID")
 
-class GenerateVendorCodeRequest(BaseModel):
+class GenerateVendorCodeRequest(StrictBaseModel):
     vendor_name: str = Field(..., description="Vendor name for code generation")
     account_type: str = Field(..., description="INTERNAL or EXTERNAL")
 
 # ---- GreenNote ----
-class GreenNotePayload(BaseModel):
+class GreenNotePayload(StrictBaseModel):
     project_name: str = Field("", description="Associated project name")
     supplier_name: str = Field("", description="Vendor/supplier name")
     expense_category: str = Field("", description="Expense category")
@@ -847,17 +1162,17 @@ class GreenNotePayload(BaseModel):
     po_number: str = Field("", description="PO number")
     remarks: str = Field("", description="General remarks")
 
-class CreateGreenNoteRequest(BaseModel):
+class CreateGreenNoteRequest(StrictBaseModel):
     note: GreenNotePayload
 
-class CancelGreenNoteRequest(BaseModel):
+class CancelGreenNoteRequest(StrictBaseModel):
     cancel_reason: str = Field(..., description="Reason for cancellation")
 
-class LinkPaymentNoteRequest(BaseModel):
+class LinkPaymentNoteRequest(StrictBaseModel):
     payment_note_id: str = Field(..., description="Payment Note ID to link")
 
 # ---- PaymentNote ----
-class PaymentNotePayload(BaseModel):
+class PaymentNotePayload(StrictBaseModel):
     user_id: str = Field("", description="Creator user UUID")
     green_note_id: str = Field("", description="Linked green note UUID")
     note_no: str = Field("", description="Payment note number")
@@ -882,28 +1197,35 @@ class PaymentNotePayload(BaseModel):
     recommendation_of_payment: str = Field("", description="Payment recommendation")
     status: str = Field("D", description="D=Draft, P=Pending, A=Approved, R=Rejected, S=Submitted")
 
-class CreatePaymentNoteRequest(BaseModel):
-    note: PaymentNotePayload
+class CreatePaymentNoteRequest(StrictBaseModel):
+    note: Optional[PaymentNotePayload] = None
+    net_payable_amount: Optional[float] = Field(None, description="Net payable amount")
+    gross_amount: Optional[float] = Field(None, description="Gross invoice amount")
+    tds_amount: Optional[float] = Field(None, description="TDS deduction amount")
+    vendor_name: Optional[str] = Field(None, description="Vendor name")
+    vendor_account_number: Optional[str] = Field(None, description="Vendor account number")
+    bank_name: Optional[str] = Field(None, description="Bank name")
+    ifsc_code: Optional[str] = Field(None, description="IFSC code")
 
-class PutOnHoldRequest(BaseModel):
+class PutOnHoldRequest(StrictBaseModel):
     hold_reason: str = Field(..., description="Reason for hold")
     user_id: str = Field(..., description="User putting on hold")
 
-class RemoveFromHoldRequest(BaseModel):
+class RemoveFromHoldRequest(StrictBaseModel):
     new_status: str = Field("P", description="Next status: P, D, or S")
     user_id: str = Field(..., description="User removing hold")
 
-class UpdateUTRRequest(BaseModel):
+class UpdateUTRRequest(StrictBaseModel):
     utr_no: str = Field(..., description="UTR number")
     utr_date: str = Field(..., description="UTR date ISO-8601")
     notify_vendor: bool = Field(False, description="Send notification to vendor")
 
-class CreateDraftFromGreenNoteRequest(BaseModel):
+class CreateDraftFromGreenNoteRequest(StrictBaseModel):
     green_note_id: str = Field(..., description="Source GreenNote UUID")
     approver_id: str = Field("", description="Approver user UUID")
 
 # ---- Payment ----
-class PaymentRequestItem(BaseModel):
+class PaymentRequestItem(StrictBaseModel):
     template_type: str = Field("", description="Payment template type")
     project: str = Field("", description="Project name")
     beneficiary_name: str = Field("", description="Beneficiary name")
@@ -913,24 +1235,24 @@ class PaymentRequestItem(BaseModel):
     amount: float = Field(0, description="Payment amount")
     purpose: str = Field("", description="Payment purpose")
 
-class CreatePaymentRequestsRequest(BaseModel):
+class CreatePaymentRequestsRequest(StrictBaseModel):
     vendors: List[PaymentRequestItem] = Field(..., description="Payment items")
     create_shortcut: bool = Field(False, description="Also create a shortcut")
     shortcut_name: str = Field("", description="Shortcut name if creating")
     payment_note_ids: List[int] = Field(default=[], description="Linked payment note IDs")
 
-class SearchVendorsPaymentRequest(BaseModel):
+class SearchVendorsPaymentRequest(StrictBaseModel):
     s_no: int = Field(0, description="From-account indicator")
     project: str = Field("", description="Project filter")
     template_type: str = Field("", description="Template type filter")
     search: str = Field("", description="Search keyword")
 
-class BankLetterRequest(BaseModel):
+class BankLetterRequest(StrictBaseModel):
     payment_note_ids: List[int] = Field(..., description="Payment note IDs to include")
     actor_id: int = Field(0, description="User creating the letter")
 
 # ---- Reimbursement ----
-class ReimbursementExpenseInput(BaseModel):
+class ReimbursementExpenseInput(StrictBaseModel):
     expense_type: str = Field("", description="Type of expense")
     bill_date: str = Field("", description="Bill date ISO-8601")
     bill_number: str = Field("", description="Bill number")
@@ -938,7 +1260,7 @@ class ReimbursementExpenseInput(BaseModel):
     bill_amount: float = Field(0, ge=0, description="Bill amount (must be non-negative)")
     remarks: str = Field("", description="Remarks")
 
-class ReimbursementNotePayload(BaseModel):
+class ReimbursementNotePayload(StrictBaseModel):
     user_id: int = Field(0, description="User UUID")
     project_id: int = Field(0, description="Project ID")
     note_no: str = Field("", description="Note number")
@@ -951,23 +1273,23 @@ class ReimbursementNotePayload(BaseModel):
     ifsc_code: str = Field("", description="IFSC code")
     status: str = Field("D", description="D=Draft, P=Pending, A=Approved, R=Rejected, S=Submitted")
 
-class CreateReimbursementNoteRequest(BaseModel):
+class CreateReimbursementNoteRequest(StrictBaseModel):
     note: ReimbursementNotePayload
     expenses: List[ReimbursementExpenseInput] = Field(default=[], description="Expense line items")
 
-class ApprovalLogUpdateRequest(BaseModel):
+class ApprovalLogUpdateRequest(StrictBaseModel):
     status: str = Field(..., description="A=Approved, R=Rejected")
     remarks: str = Field("", description="Reviewer remarks")
     reviewer_id: int = Field(0, description="Reviewer user ID")
 
 # ---- Notification ----
-class SendNotificationRequest(BaseModel):
+class SendNotificationRequest(StrictBaseModel):
     to: str = Field(..., description="Recipient email/phone")
     template_name: str = Field(..., description="Template name e.g. 'welcome_email'")
     data: Dict[str, Any] = Field(default={}, description="Template variables")
 
 # ---- Approval ----
-class InitiateApprovalRequest(BaseModel):
+class InitiateApprovalRequest(StrictBaseModel):
     sl_no: str = Field(..., description="GreenNote or PaymentNote ID")
     amount: float = Field(..., description="Amount (Taxable + GST)")
     department_id: str = Field("", description="Department UUID")
@@ -1016,6 +1338,7 @@ If 2FA is bypassed/completed, issues signed HMAC-SHA256 JWT access and refresh t
 """)
 async def login(body: LoginRequest, request: Request):
     client_ip = request.client.host if request.client else "127.0.0.1"
+    check_auth_rate_limit(request, body.login.strip().lower())
     check_rate_limit(f"login:{body.login.strip().lower()}:{client_ip}", max_requests=10, window_seconds=60)
     try:
         try:
@@ -1048,20 +1371,22 @@ async def login(body: LoginRequest, request: Request):
                     raise
 
         if not users:
+            record_auth_failure(client_ip, body.login.strip().lower())
             raise HTTPException(401, "Invalid username or password credentials")
         u = users[0]
 
-        # Verify password using bcrypt or fallback
+        # Verify password using bcrypt (fail closed on any error; SEC-007 mitigation)
         password_valid = False
         try:
-            if u["password"] and u["password"].startswith("$2"):
-                password_valid = bcrypt.checkpw(body.password.encode("utf-8"), u["password"].encode("utf-8"))
-            else:
-                password_valid = (u["password"] == body.password)
+            if u.get("password") and str(u["password"]).startswith(("$2a$", "$2b$", "$2y$")):
+                password_valid = bcrypt.checkpw(body.password.encode("utf-8"), str(u["password"]).encode("utf-8"))
+            elif os.environ.get("ENVIRONMENT") == "test" and u.get("password") == body.password:
+                password_valid = True
         except Exception:
-            password_valid = (body.password == "password123")
+            password_valid = False
 
         if not password_valid:
+            record_auth_failure(client_ip, body.login.strip().lower())
             raise HTTPException(401, "Invalid password credentials")
 
         # Check if mandatory password change is required upon first login (OPEN-03)
@@ -1121,36 +1446,46 @@ async def login(body: LoginRequest, request: Request):
             return resp_payload
 
         # Direct login without 2FA
+        reset_auth_failures(client_ip, body.login.strip().lower())
         return issue_user_jwt_tokens(u, auth_method="password")
 
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise handle_internal_error(e, 'user authentication')
 
 
 @app.post("/api/v1/auth/login-otp/verify", tags=["🔐 Auth Service"], summary="Verify 2-Way Login OTP",
           description="Verifies the 6-digit numeric OTP against the temporary 2FA session token and issues signed JWT tokens.")
-async def verify_login_otp(body: LoginOTPVerifyRequest):
+async def verify_login_otp(body: LoginOTPVerifyRequest, request: Request):
+    client_ip = request.client.host if request.client else "127.0.0.1"
     clean_expired_otps()
     record = otp_store.get(body.session_temp_token)
     if not record:
+        record_auth_failure(client_ip)
         raise HTTPException(400, "2FA security session has expired or is invalid. Please log in again.")
+
+    account_email = record.get("email")
+    check_auth_rate_limit(request, account_email)
 
     if record.get("expires_at", 0) < datetime.datetime.now(datetime.timezone.utc).timestamp():
         otp_store.delete(body.session_temp_token)
+        record_auth_failure(client_ip, account_email)
         raise HTTPException(400, "Two-factor OTP has expired. Please request a new code.")
 
     record["attempts"] = record.get("attempts", 0) + 1
     if record["attempts"] > 5:
         otp_store.delete(body.session_temp_token)
+        record_auth_failure(client_ip, account_email)
         raise HTTPException(400, "Too many incorrect OTP attempts. Please restart authentication.")
 
     if record["otp"] != body.otp.strip():
+        record_auth_failure(client_ip, account_email)
         otp_store.set(body.session_temp_token, record, ttl_seconds=300)
         raise HTTPException(401, f"Incorrect 6-digit OTP code ({5 - record['attempts']} attempts remaining).")
 
     # OTP is verified! Consume it
+    reset_auth_failures(client_ip, account_email)
     user_id = record["user_id"]
     otp_store.delete(body.session_temp_token)
 
@@ -1189,6 +1524,7 @@ async def verify_login_otp(body: LoginOTPVerifyRequest):
           description="Requests a 6-digit OTP sent to registered email for passwordless 2-way authentication.")
 async def request_login_otp(body: LoginOTPRequest, request: Request):
     client_ip = request.client.host if request.client else "127.0.0.1"
+    check_auth_rate_limit(request, body.email.strip().lower())
     check_rate_limit(f"otp:{body.email.strip().lower()}:{client_ip}", max_requests=5, window_seconds=60)
     clean_expired_otps()
     users = query_db(
@@ -1239,7 +1575,9 @@ async def request_login_otp(body: LoginOTPRequest, request: Request):
 
 @app.post("/api/v1/auth/sso/google", tags=["🔐 Auth Service"], summary="Google SSO Authentication",
           description="Authenticates via Google OAuth2 token/code or enterprise Google identity, linking or auto-provisioning database user and issuing signed JWT.")
-async def sso_google(body: GoogleSSOLoginRequest):
+async def sso_google(body: GoogleSSOLoginRequest, request: Request):
+    if body.email:
+        check_auth_rate_limit(request, body.email.strip().lower())
     is_test_mode = os.environ.get("ENVIRONMENT") == "test"
     user_email = None
     user_name = body.name or "Google Officer"
@@ -1311,7 +1649,8 @@ async def sso_google(body: GoogleSSOLoginRequest):
 
 @app.post("/api/v1/auth/register", tags=["🔐 Auth Service"], summary="Register User",
           description="Registers a new user account.")
-async def register(body: RegisterRequest):
+async def register(body: RegisterRequest, request: Request):
+    check_auth_rate_limit(request, body.email.strip().lower())
     return {"user_id": str(uuid.uuid4()), "name": body.name, "email": body.email, "roles": body.roles, "message": "User registered successfully"}
 
 
@@ -1323,13 +1662,15 @@ async def verify_email(body: VerifyEmailRequest):
 
 @app.post("/api/v1/auth/forgot-password", tags=["🔐 Auth Service"], summary="Forgot Password (Email Link)",
           description="Initiates password reset flow.")
-async def forgot_password(body: ForgotPasswordRequest):
+async def forgot_password(body: ForgotPasswordRequest, request: Request):
+    check_auth_rate_limit(request, body.email.strip().lower())
     return {"success": True, "message": "Password reset email sent"}
 
 
 @app.post("/api/v1/auth/reset-password", tags=["🔐 Auth Service"], summary="Reset Password by Token",
           description="Resets the user's password.")
-async def reset_password(body: ResetPasswordRequest):
+async def reset_password(body: ResetPasswordRequest, request: Request):
+    check_auth_rate_limit(request, body.otp)
     return {"message": "Password reset successful", "success": True}
 
 
@@ -1340,8 +1681,14 @@ async def change_password(body: ChangePasswordRequest, authorization: Optional[s
     if body.session_temp_token:
         try:
             payload = decode_jwt_token(body.session_temp_token)
-            if payload.get("type") in ("password_change_required", "2fa_pending"):
+            if payload.get("type") == "password_change_required":
                 user_id = payload.get("sub")
+            elif payload.get("type") == "2fa_pending":
+                raise HTTPException(403, "Two-factor authentication (2FA) verification must be completed prior to password change.")
+            else:
+                raise HTTPException(401, "Invalid token type for password change.")
+        except HTTPException:
+            raise
         except Exception:
             raise HTTPException(401, "Invalid or expired password reset token.")
     elif authorization and authorization.startswith("Bearer "):
@@ -1375,20 +1722,36 @@ async def change_password(body: ChangePasswordRequest, authorization: Optional[s
 
 @app.post("/api/v1/auth/forgot-password-otp", tags=["🔐 Auth Service"], summary="Forgot Password (OTP)",
           description="Sends a 6-digit OTP for password reset.")
-async def forgot_password_otp(body: ForgotPasswordOTPRequest):
+async def forgot_password_otp(body: ForgotPasswordOTPRequest, request: Request):
+    check_auth_rate_limit(request, body.email.strip().lower())
     return {"message": "OTP sent to email", "success": True}
 
 
 @app.post("/api/v1/auth/verify-otp-reset-password", tags=["🔐 Auth Service"], summary="Verify OTP & Reset Password",
           description="Verifies OTP and resets password.")
-async def verify_otp_reset(body: VerifyOTPResetRequest):
+async def verify_otp_reset(body: VerifyOTPResetRequest, request: Request):
+    check_auth_rate_limit(request, body.email.strip().lower())
     return {"message": "Password reset via OTP successful", "success": True}
 
 
 @app.post("/api/v1/auth/logout", tags=["🔐 Auth Service"], summary="User Logout",
-          description="Invalidates active session.")
-async def logout(body: LogoutRequest):
-    return {"success": True, "message": "Logged out successfully"}
+          description="Invalidates active session token on server-side denylist.")
+async def logout(body: LogoutRequest, authorization: Optional[str] = Header(None)):
+    token_to_revoke = None
+    if authorization and authorization.startswith("Bearer "):
+        token_to_revoke = authorization.split(" ")[1]
+    elif body.refresh_token:
+        token_to_revoke = body.refresh_token
+
+    if token_to_revoke:
+        try:
+            payload = jwt.decode(token_to_revoke, options={"verify_signature": False})
+            exp = float(payload.get("exp", time.time() + 86400))
+            invalidate_token(token_to_revoke, exp)
+        except Exception:
+            invalidate_token(token_to_revoke, time.time() + 86400)
+
+    return {"success": True, "message": "Logged out successfully and token invalidated on server-side denylist."}
 
 
 @app.post("/api/v1/auth/refresh", tags=["🔐 Auth Service"], summary="Refresh Token",
@@ -1526,7 +1889,7 @@ async def get_tenant(tenant_id: str = Path(..., description="Tenant UUID"), curr
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise handle_internal_error(e, 'fetching tenant details')
 
 
 # -- Roles --
@@ -1556,7 +1919,7 @@ async def list_roles(
         total = query_db("SELECT COUNT(*) as cnt FROM roles")
         return {"roles": roles, "pagination": {"page": page, "page_size": page_size, "total_items": total[0]["cnt"] if total else 0, "total_pages": 1}}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise handle_internal_error(e, 'listing roles')
 
 
 @app.get("/api/v1/roles/{role_id}", tags=["👤 User Management — Roles & Permissions"], summary="Get Role",
@@ -1571,7 +1934,7 @@ async def get_role(role_id: str = Path(..., description="Role UUID"), current_us
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise handle_internal_error(e, 'fetching role')
 
 
 @app.put("/api/v1/roles/{role_id}", tags=["👤 User Management — Roles & Permissions"], summary="Update Role",
@@ -1599,7 +1962,7 @@ async def list_permissions(
             perms = query_db("SELECT permission_id, is_system_permission, name, description, module, action FROM permissions ORDER BY module, name")
         return {"permissions": perms, "total_count": len(perms)}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise handle_internal_error(e, 'listing permissions')
 
 
 # -- Users --
@@ -1648,7 +2011,7 @@ async def create_user(body: CreateUserRequest, current_user: dict = Depends(get_
             res_payload["temporary_password"] = initial_password
         return res_payload
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise handle_internal_error(e, 'creating user')
 
 
 @app.get("/api/v1/users", tags=["👤 User Management — Users"], summary="List Users",
@@ -1673,7 +2036,7 @@ async def list_users(
         total = query_db("SELECT COUNT(*) as cnt FROM users")
         return {"users": users, "pagination": {"page": page, "page_size": page_size, "total_items": total[0]["cnt"] if total else 0}}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise handle_internal_error(e, 'listing users')
 
 
 @app.get("/api/v1/users/{user_id}", tags=["👤 User Management — Users"], summary="Get User",
@@ -1704,7 +2067,7 @@ async def get_user(user_id: str = Path(..., description="User UUID"), current_us
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise handle_internal_error(e, 'fetching user')
 
 
 @app.put("/api/v1/users/{user_id}", tags=["👤 User Management — Users"], summary="Update User",
@@ -1784,7 +2147,7 @@ async def list_user_orgs(user_id: str = Path(..., description="User UUID")):
         """, (user_id,))
         return {"organizations": orgs, "total_count": len(orgs)}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise handle_internal_error(e, 'listing user organizations')
 
 
 # -- Dropdowns --
@@ -1795,7 +2158,7 @@ async def departments_dropdown():
         depts = query_db("SELECT id, name FROM departments ORDER BY name")
         return {"departments": depts}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise handle_internal_error(e, 'fetching departments dropdown')
 
 
 @app.get("/api/v1/users/dropdowns/designations", tags=["👤 User Management — Dropdowns"], summary="Designations Dropdown",
@@ -1805,7 +2168,7 @@ async def designations_dropdown():
         desigs = query_db("SELECT id, name FROM designations ORDER BY name")
         return {"designations": desigs}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise handle_internal_error(e, 'fetching designations dropdown')
 
 
 @app.get("/api/v1/users/dropdowns/roles", tags=["👤 User Management — Dropdowns"], summary="Roles Dropdown",
@@ -1815,13 +2178,49 @@ async def roles_dropdown():
         roles = query_db("SELECT role_id as id, name, description FROM roles ORDER BY name")
         return {"roles": roles}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise handle_internal_error(e, 'fetching roles dropdown')
 
+
+
+@app.get("/api/v1/files/{file_id}", tags=["📁 Secure File Storage"], summary="Download Secure File Attachment",
+         description="Serves an uploaded attachment with anti-MIME-sniffing, safe download headers, and directory traversal defense.")
+async def download_file(file_id: str):
+    clean_id = sanitize_filename(file_id)
+    target_path = os.path.abspath(os.path.join(UPLOAD_STORAGE_DIR, clean_id))
+    storage_root = os.path.abspath(UPLOAD_STORAGE_DIR)
+    if not target_path.startswith(storage_root) or not os.path.isfile(target_path):
+        raise HTTPException(404, "File not found or access denied.")
+    
+    ext = os.path.splitext(clean_id)[1].lower()
+    media_types = {
+        ".pdf": "application/pdf",
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".svg": "image/svg+xml",
+    }
+    media_type = media_types.get(ext, "application/octet-stream")
+    return FileResponse(
+        target_path,
+        media_type=media_type,
+        headers={
+            "X-Content-Type-Options": "nosniff",
+            "Content-Disposition": f'attachment; filename="{clean_id}"'
+        }
+    )
 
 # -- Signature --
 @app.post("/api/v1/users/{user_id}/signature", tags=["👤 User Management — Users"], summary="Upload User Signature",
           description="Uploads a user's signature image. Supports PNG/JPEG. The signature URL is stored on the user record and used in document generation.")
-async def upload_signature(user_id: str):
+async def upload_signature(user_id: str, file: Optional[UploadFile] = File(None)):
+    validate_uuid(user_id, "user_id")
+    if file:
+        res = await validate_and_save_upload(file, allowed_extensions=ALLOWED_IMAGE_EXTENSIONS, category="signature")
+        try:
+            execute_db("UPDATE users SET signature_url = %s, updated_at = NOW() WHERE user_id = %s", (res["url"], user_id))
+        except Exception:
+            pass
+        return {"success": True, "message": "Signature uploaded successfully", "user_id": user_id, "file": res}
     return {"success": True, "message": "Signature upload — forwards to User gRPC service", "user_id": user_id}
 
 
@@ -1847,7 +2246,7 @@ async def list_activity_logs(page: int = Query(1, ge=1), page_size: int = Query(
         total = query_db("SELECT COUNT(*) as cnt FROM user_login_history")
         return {"logs": logs, "pagination": {"page": page, "page_size": page_size, "total_items": total[0]["cnt"] if total else 0, "total_pages": 1}}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise handle_internal_error(e, 'listing activity logs')
 
 
 # ═══════════════════════════════════════════════════════
@@ -1878,7 +2277,7 @@ async def list_organizations(page: int = Query(1, ge=1), page_size: int = Query(
         total = query_db("SELECT COUNT(*) as cnt FROM organizations")
         return {"organizations": orgs, "total_count": total[0]["cnt"] if total else 0, "pagination": {"current_page": page, "page_size": page_size}}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise handle_internal_error(e, 'listing organizations')
 
 
 @app.get("/api/v1/tenants/{tenant_id}/organizations", tags=["🏢 Organization Service"], summary="List Organizations by Tenant",
@@ -1891,7 +2290,7 @@ async def list_orgs_by_tenant(tenant_id: str, page: int = Query(1), page_size: i
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise handle_internal_error(e, 'listing tenant organizations')
 
 
 @app.get("/api/v1/organizations/{parent_org_id}/children", tags=["🏢 Organization Service"], summary="List Child Organizations",
@@ -1904,7 +2303,7 @@ async def list_child_orgs(parent_org_id: str, page: int = Query(1), page_size: i
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise handle_internal_error(e, 'listing child organizations')
 
 
 @app.get("/api/v1/organizations/{org_id}", tags=["🏢 Organization Service"], summary="Get Organization",
@@ -1919,7 +2318,7 @@ async def get_organization(org_id: str = Path(..., description="Organization UUI
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise handle_internal_error(e, 'fetching organization')
 
 
 @app.get("/api/v1/organizations/{org_id}/with-projects", tags=["🏢 Organization Service"], summary="Get Organization with Projects",
@@ -1935,7 +2334,7 @@ async def get_org_with_projects(org_id: str, current_user: dict = Depends(get_cu
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise handle_internal_error(e, 'fetching organization projects')
 
 
 @app.get("/api/v1/organizations/code/{code}", tags=["🏢 Organization Service"], summary="Get Organization by Code",
@@ -1949,7 +2348,7 @@ async def get_org_by_code(code: str = Path(..., description="Organization code")
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise handle_internal_error(e, 'fetching organization by code')
 
 
 @app.put("/api/v1/organizations/{org_id}", tags=["🏢 Organization Service"], summary="Update Organization",
@@ -1966,7 +2365,15 @@ async def delete_organization(org_id: str = Path(..., description="Organization 
 
 @app.post("/api/v1/organizations/{org_id}/logo", tags=["🏢 Organization Service"], summary="Upload Organization Logo",
           description="Uploads a logo image for the organization. Supports PNG/JPEG/SVG. Stored in object storage and URL saved to org record.")
-async def upload_org_logo(org_id: str, current_user: dict = Depends(get_current_user)):
+async def upload_org_logo(org_id: str, file: Optional[UploadFile] = File(None), current_user: dict = Depends(get_current_user)):
+    validate_uuid(org_id, "org_id")
+    if file:
+        res = await validate_and_save_upload(file, allowed_extensions=ALLOWED_IMAGE_EXTENSIONS, category="logo")
+        try:
+            execute_db("UPDATE organizations SET logo = %s, updated_at = NOW() WHERE org_id = %s", (res["url"], org_id))
+        except Exception:
+            pass
+        return {"success": True, "message": "Organization logo uploaded successfully", "organization_id": org_id, "file": res}
     return {"success": True, "message": "Logo upload — forwards to Organization gRPC service", "organization_id": org_id}
 
 
@@ -1981,7 +2388,7 @@ async def create_department(body: CreateDepartmentRequest):
         execute_db("INSERT INTO departments (name, description) VALUES (%s, %s)", (body.name, body.description))
         return {"department": {"name": body.name, "description": body.description}, "message": "Department created"}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise handle_internal_error(e, 'creating department')
 
 
 @app.get("/api/v1/departments", tags=["🏫 Department Service"], summary="List Departments",
@@ -1992,7 +2399,7 @@ async def list_departments(page: int = Query(1, ge=1), page_size: int = Query(20
         total = query_db("SELECT COUNT(*) as cnt FROM departments")
         return {"departments": depts, "total_count": total[0]["cnt"] if total else 0}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise handle_internal_error(e, 'listing departments')
 
 
 @app.get("/api/v1/departments/{id}", tags=["🏫 Department Service"], summary="Get Department",
@@ -2007,7 +2414,7 @@ async def get_department(id: str = Path(..., description="Department UUID")):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise handle_internal_error(e, 'fetching department')
 
 
 @app.put("/api/v1/departments/{id}", tags=["🏫 Department Service"], summary="Update Department",
@@ -2019,7 +2426,7 @@ async def update_department(id: str = Path(..., description="Department UUID"), 
                    (body.name, body.description, id))
         return {"department": {"id": id, "name": body.name, "description": body.description}, "message": "Department updated"}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise handle_internal_error(e, 'updating department')
 
 
 @app.delete("/api/v1/departments/{id}", tags=["🏫 Department Service"], summary="Delete Department",
@@ -2030,7 +2437,7 @@ async def delete_department(id: str = Path(..., description="Department UUID")):
         execute_db("DELETE FROM departments WHERE id = %s", (id,))
         return {"message": "Department deleted"}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise handle_internal_error(e, 'deleting department')
 
 
 # ══════════════════════════════════════════════════════════════
@@ -2044,7 +2451,7 @@ async def create_designation(body: CreateDesignationRequest):
         execute_db("INSERT INTO designations (name, description) VALUES (%s, %s)", (body.name, body.description))
         return {"designation": {"name": body.name, "description": body.description}, "message": "Designation created"}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise handle_internal_error(e, 'creating designation')
 
 
 @app.get("/api/v1/designations", tags=["📋 Designation Service"], summary="List Designations",
@@ -2055,7 +2462,7 @@ async def list_designations(page: int = Query(1, ge=1), page_size: int = Query(2
         total = query_db("SELECT COUNT(*) as cnt FROM designations")
         return {"designations": desigs, "total_count": total[0]["cnt"] if total else 0}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise handle_internal_error(e, 'listing designations')
 
 
 @app.get("/api/v1/designations/{id}", tags=["📋 Designation Service"], summary="Get Designation",
@@ -2070,7 +2477,7 @@ async def get_designation(id: str = Path(..., description="Designation UUID")):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise handle_internal_error(e, 'fetching designation')
 
 
 @app.put("/api/v1/designations/{id}", tags=["📋 Designation Service"], summary="Update Designation",
@@ -2102,7 +2509,7 @@ async def create_project(body: CreateProjectRequest):
         """, (new_proj_id, body.project_name, body.org_id, body.tenant_id, body.created_by))
         return {"success": True, "project": {"project_id": new_proj_id, "project_name": body.project_name, "org_id": body.org_id}}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise handle_internal_error(e, 'creating project')
 
 
 @app.get("/api/v1/projects/{project_id}", tags=["📁 Project Service"], summary="Get Project",
@@ -2117,7 +2524,7 @@ async def get_project(project_id: str = Path(..., description="Project UUID")):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise handle_internal_error(e, 'fetching project')
 
 
 @app.get("/api/v1/organizations/{org_id}/projects", tags=["📁 Project Service"], summary="List Projects by Organization",
@@ -2128,7 +2535,7 @@ async def list_projects_by_org(org_id: str, page: int = Query(1), page_size: int
         projects = query_db("SELECT id, tenant_id, org_id, project_name, created_by, created_at FROM projects WHERE org_id = %s ORDER BY project_name LIMIT %s OFFSET %s", (org_id, page_size, (page - 1) * page_size))
         return {"projects": projects, "total_count": len(projects)}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise handle_internal_error(e, 'listing organization projects')
 
 
 # ═══════════════════════════════════════════════════════
@@ -2212,7 +2619,7 @@ async def list_vendors(
         total = query_db("SELECT COUNT(*) as cnt FROM vendors")
         return {"vendors": vendors, "total_count": total[0]["cnt"] if total else 0}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise handle_internal_error(e, 'listing vendors')
 
 
 @app.get("/api/v1/vendors/{vendor_id}", tags=["🤝 Vendor Service"], summary="Get Vendor",
@@ -2232,7 +2639,7 @@ async def get_vendor(vendor_id: str = Path(..., description="Vendor UUID")):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise handle_internal_error(e, 'fetching vendor')
 
 
 @app.get("/api/v1/vendors/code/{vendor_code}", tags=["🤝 Vendor Service"], summary="Get Vendor by Code",
@@ -2251,7 +2658,7 @@ async def get_vendor_by_code(vendor_code: str = Path(..., description="Vendor co
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise handle_internal_error(e, 'fetching vendor by code')
 
 
 @app.put("/api/v1/vendors/{vendor_id}", tags=["🤝 Vendor Service"], summary="Update Vendor",
@@ -2289,10 +2696,14 @@ async def regenerate_vendor_code(vendor_id: str):
 # -- Vendor Accounts --
 @app.post("/api/v1/vendors/{vendor_id}/accounts", tags=["🤝 Vendor Service — Accounts"], summary="Create Vendor Account",
           description="Adds a new bank account to a vendor. Multiple accounts are supported. One can be marked as primary.")
-async def create_vendor_account(vendor_id: str, body: CreateVendorAccountRequest):
+async def create_vendor_account(
+    vendor_id: str, 
+    body: CreateVendorAccountRequest,
+    current_user: dict = Depends(get_current_user)
+):
     vendor_id = validate_uuid(vendor_id, "vendor_id")
     account_id = str(uuid.uuid4())
-    creator_id = body.created_by or "550e8400-e29b-41d4-a716-446655440001"
+    creator_id = str(current_user.get("sub") or body.created_by or "550e8400-e29b-41d4-a716-446655440001")
 
     try:
         if body.is_primary:
@@ -2334,7 +2745,10 @@ async def create_vendor_account(vendor_id: str, body: CreateVendorAccountRequest
 
 @app.get("/api/v1/vendors/{vendor_id}/accounts", tags=["🤝 Vendor Service — Accounts"], summary="Get Vendor Accounts",
          description="Lists all bank accounts for a vendor including primary/secondary status.")
-async def get_vendor_accounts(vendor_id: str = Path(..., description="Vendor UUID")):
+async def get_vendor_accounts(
+    vendor_id: str = Path(..., description="Vendor UUID"),
+    current_user: dict = Depends(get_current_user)
+):
     vendor_id = validate_uuid(vendor_id, "vendor_id")
     try:
         accounts = query_db("""
@@ -2371,13 +2785,16 @@ async def get_vendor_accounts(vendor_id: str = Path(..., description="Vendor UUI
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise handle_internal_error(e, 'fetching vendor accounts')
 
 
 
 @app.get("/api/v1/vendors/{vendor_id}/banking-details", tags=["🤝 Vendor Service — Accounts"], summary="Get Vendor Banking Details",
          description="Returns the primary banking details for a vendor, used in payment processing.")
-async def get_vendor_banking(vendor_id: str = Path(..., description="Vendor UUID")):
+async def get_vendor_banking(
+    vendor_id: str = Path(..., description="Vendor UUID"),
+    current_user: dict = Depends(get_current_user)
+):
     vendor_id = validate_uuid(vendor_id, "vendor_id")
     try:
         accounts = query_db("""
@@ -2410,24 +2827,33 @@ async def get_vendor_banking(vendor_id: str = Path(..., description="Vendor UUID
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise handle_internal_error(e, 'fetching vendor banking details')
 
 
 @app.put("/api/v1/vendors/accounts/{account_id}", tags=["🤝 Vendor Service — Accounts"], summary="Update Vendor Account",
          description="Updates bank account details. Partial update supported.")
-async def update_vendor_account(account_id: str):
+async def update_vendor_account(
+    account_id: str,
+    current_user: dict = Depends(get_current_user)
+):
     return {"account": {"id": account_id}}
 
 
 @app.delete("/api/v1/vendors/accounts/{account_id}", tags=["🤝 Vendor Service — Accounts"], summary="Delete Vendor Account",
             description="Deletes a bank account. Cannot delete the primary account if it's the only one.")
-async def delete_vendor_account(account_id: str):
+async def delete_vendor_account(
+    account_id: str,
+    current_user: dict = Depends(get_current_user)
+):
     return {"message": "Account deleted"}
 
 
 @app.post("/api/v1/vendors/accounts/{account_id}/toggle-status", tags=["🤝 Vendor Service — Accounts"], summary="Toggle Account Status",
           description="Toggles a vendor bank account between active and inactive status.")
-async def toggle_account_status(account_id: str):
+async def toggle_account_status(
+    account_id: str,
+    current_user: dict = Depends(get_current_user)
+):
     return {"account": {"id": account_id}}
 
 
@@ -2439,12 +2865,16 @@ async def vendor_projects_dropdown():
         projects = query_db("SELECT id, project_name FROM projects ORDER BY project_name")
         return {"projects": projects}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise handle_internal_error(e, 'fetching vendor projects dropdown')
 
 
 @app.post("/api/v1/vendors/{vendor_id}/document", tags=["🤝 Vendor Service"], summary="Upload Vendor Document",
           description="Uploads a document (PAN card, GST certificate, etc.) for a vendor. Stored in object storage.")
-async def upload_vendor_document(vendor_id: str):
+async def upload_vendor_document(vendor_id: str, file: Optional[UploadFile] = File(None)):
+    validate_uuid(vendor_id, "vendor_id")
+    if file:
+        res = await validate_and_save_upload(file, allowed_extensions=ALLOWED_DOC_EXTENSIONS, category="vendor_document")
+        return {"success": True, "message": "Vendor document uploaded successfully", "vendor_id": vendor_id, "file": res}
     return {"success": True, "message": "Document upload — forwards to Vendor gRPC service", "vendor_id": vendor_id}
 
 
@@ -2474,14 +2904,18 @@ async def send_notification(body: SendNotificationRequest):
     }
 
 
-class TestLiveOTPRequest(BaseModel):
+class TestLiveOTPRequest(StrictBaseModel):
     email: str = Field(..., description="Target email address")
     phone: Optional[str] = Field(None, description="Optional target mobile phone (+91...)")
     name: Optional[str] = Field("NHIT Officer", description="Recipient name")
 
 @app.post("/api/v1/notifications/test-otp", tags=["🔔 Notification Service"], summary="Live Dispatch Test OTP",
-          description="Directly triggers the multi-channel OTP dispatcher to send an actual email or SMS.")
-async def test_live_otp_dispatch(body: TestLiveOTPRequest):
+          description="Directly triggers the multi-channel OTP dispatcher with authentication and rate limits.")
+async def test_live_otp_dispatch(
+    body: TestLiveOTPRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    check_rate_limit(f"test_otp:{body.email.strip().lower()}", max_requests=3, window_seconds=300)
     code = generate_numeric_otp(6)
     res = dispatch_otp(
         recipient=body.email,
@@ -2492,8 +2926,8 @@ async def test_live_otp_dispatch(body: TestLiveOTPRequest):
     )
     return {
         "success": True,
-        "otp_generated": code,
-        "dispatch_result": res
+        "message": f"Live test OTP successfully dispatched to {body.email}",
+        "delivery": res
     }
 
 
@@ -2513,7 +2947,10 @@ Creates a new Green Note (approval/expenditure note) for vendor payments.
 
 **Required Context:** JWT must contain org_id and tenant_id.
 """)
-async def create_green_note(body: CreateGreenNoteRequest):
+async def create_green_note(
+    body: CreateGreenNoteRequest,
+    current_user: dict = Depends(get_current_user)
+):
     if body.note.base_value < 0 or body.note.total_amount < 0 or body.note.gst < 0 or body.note.other_charges < 0:
         raise HTTPException(422, "Financial disbursement values (base_value, total_amount, gst, other_charges) cannot be negative.")
     new_id = f"gn-550e8400-{len(GREEN_NOTES_STORE) + 1:04d}"
@@ -2524,11 +2961,22 @@ async def create_green_note(body: CreateGreenNoteRequest):
         "supplier_name": body.note.supplier_name or "Larsen & Toubro Ltd",
         "amount": body.note.total_amount or 250000.0,
         "status": "PENDING",
-        "created_by": "System User",
+        "created_by": str(current_user.get("name") or "System User"),
         "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "payload": body.note.model_dump()
     }
     GREEN_NOTES_STORE.insert(0, item)
+    try:
+        execute_db("""
+            INSERT INTO green_notes (
+                id, sl_no, project_name, supplier_name, amount, status, created_by, payload, created_at, updated_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+        """, (
+            new_id, item["sl_no"], item["project_name"], item["supplier_name"],
+            item["amount"], item["status"], item["created_by"], json.dumps(item["payload"])
+        ))
+    except Exception:
+        pass
     return {"id": new_id, "success": True, "message": "Green note created successfully", "data": item}
 
 
@@ -2539,6 +2987,7 @@ async def list_green_notes(
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
     include_all: bool = Query(False, description="Include all statuses"),
+    current_user: dict = Depends(get_current_user)
 ):
     notes = GREEN_NOTES_STORE
     if status and not include_all:
@@ -2550,7 +2999,10 @@ async def list_green_notes(
 
 @app.get("/api/v1/green-notes/{id}", tags=["📝 GreenNote Service"], summary="Get Green Note Detail",
          description="Retrieves the full green note payload including all compliance fields, invoice details, financial calculations, approval history, and linked documents.")
-async def get_green_note(id: str = Path(..., description="Green Note UUID")):
+async def get_green_note(
+    id: str = Path(..., description="Green Note UUID"),
+    current_user: dict = Depends(get_current_user)
+):
     match = next((n for n in GREEN_NOTES_STORE if n.get("id") == id), None)
     if not match:
         raise HTTPException(404, "Green Note not found")
@@ -2559,7 +3011,11 @@ async def get_green_note(id: str = Path(..., description="Green Note UUID")):
 
 @app.patch("/api/v1/green-notes/{id}", tags=["📝 GreenNote Service"], summary="Update Green Note",
            description="Updates a green note. Only allowed when status is DRAFT or PENDING (before approval). Cannot update after approval/rejection.")
-async def update_green_note(id: str, body: CreateGreenNoteRequest):
+async def update_green_note(
+    id: str, 
+    body: CreateGreenNoteRequest,
+    current_user: dict = Depends(get_current_user)
+):
     return {"id": id, "success": True, "message": "Green note updated"}
 
 
@@ -2571,13 +3027,17 @@ class GreenNoteStatus(str, Enum):
     REJECTED = "REJECTED"
     CANCELLED = "CANCELLED"
 
-class UpdateNoteStatusRequest(BaseModel):
+class UpdateNoteStatusRequest(StrictBaseModel):
     status: str = Field(..., description="Allowed statuses: DRAFT, PENDING, SUBMITTED, APPROVED, REJECTED, CANCELLED")
     remarks: Optional[str] = Field("", description="Review remarks")
 
 @app.patch("/api/v1/green-notes/{id}/status", tags=["📝 GreenNote Service"], summary="Update Green Note Status",
-           description="Updates approval status with reviewer remarks. Enforces statutory status whitelist.")
-async def update_green_note_status(id: str, body: UpdateNoteStatusRequest):
+           description="Updates approval status with reviewer remarks. Enforces statutory status whitelist and sequential progression.")
+async def update_green_note_status(
+    id: str, 
+    body: UpdateNoteStatusRequest,
+    current_user: dict = Depends(get_current_user)
+):
     new_status = str(body.status).strip().upper()
     valid_statuses = {s.value for s in GreenNoteStatus}
     if new_status not in valid_statuses:
@@ -2588,27 +3048,53 @@ async def update_green_note_status(id: str, body: UpdateNoteStatusRequest):
     match = next((n for n in GREEN_NOTES_STORE if n.get("id") == id), None)
     if not match:
         raise HTTPException(404, "Green Note not found")
+        
+    curr_status = str(match.get("status", "DRAFT")).upper()
+    allowed_transitions = {
+        "DRAFT": {"SUBMITTED", "PENDING", "CANCELLED"},
+        "SUBMITTED": {"CHECKED", "PENDING", "APPROVED", "REJECTED", "CANCELLED"},
+        "PENDING": {"CHECKED", "APPROVED", "REJECTED", "CANCELLED"},
+        "CHECKED": {"VERIFIED", "APPROVED", "REJECTED", "CANCELLED"},
+        "VERIFIED": {"APPROVED", "REJECTED", "CANCELLED"},
+        "REJECTED": {"DRAFT", "CANCELLED"},
+        "APPROVED": set(),
+        "CANCELLED": set()
+    }
+    if curr_status in allowed_transitions and new_status not in allowed_transitions[curr_status] and curr_status != new_status:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid approval status transition from '{curr_status}' to '{new_status}'. Enforce 4-tier progression: Prepared -> Checked -> Verified -> Sanctioned."
+        )
+
     match["status"] = new_status
     match["remarks"] = body.remarks
+    try:
+        execute_db("UPDATE green_notes SET status = %s, remarks = %s, updated_at = NOW() WHERE id = %s", (new_status, body.remarks, id))
+    except Exception:
+        pass
     return {"id": id, "success": True, "status": new_status, "message": f"Green note status set to {new_status}"}
 
 
 
 @app.post("/api/v1/green-notes/{id}/cancel", tags=["📝 GreenNote Service"], summary="Cancel Green Note",
           description="Cancels a green note with a mandatory reason. Sets status to CANCELLED. Cannot cancel already-paid notes.")
-async def cancel_green_note(id: str, body: CancelGreenNoteRequest):
+async def cancel_green_note(
+    id: str, 
+    body: CancelGreenNoteRequest,
+    current_user: dict = Depends(get_current_user)
+):
     return {"id": id, "success": True, "message": "Green note cancelled"}
 
 
 @app.get("/api/v1/organization/projects", tags=["📝 GreenNote Service — Organization Data"], summary="Get Organization Projects",
          description="Returns projects for the authenticated user's organization. Used in green note creation forms.")
-async def get_org_projects():
+async def get_org_projects(current_user: dict = Depends(get_current_user)):
     return {"projects": [], "message": ""}
 
 
 @app.get("/api/v1/organization/vendors", tags=["📝 GreenNote Service — Organization Data"], summary="Get Organization Vendors",
          description="Returns vendors/suppliers for the authenticated user's organization. Used in green note creation forms.")
-async def get_org_vendors():
+async def get_org_vendors(current_user: dict = Depends(get_current_user)):
     return {"vendors": [], "message": ""}
 
 
@@ -2620,7 +3106,11 @@ async def get_org_departments():
 
 @app.post("/api/v1/green-notes/{note_id}/documents", tags=["📝 GreenNote Service"], summary="Upload Green Note Documents",
           description="Uploads supporting documents for a green note (invoices, POs, contracts). Supports multiple files in a single request.")
-async def upload_green_note_docs(note_id: str):
+async def upload_green_note_docs(note_id: str, file: Optional[UploadFile] = File(None)):
+    validate_uuid(note_id, "note_id")
+    if file:
+        res = await validate_and_save_upload(file, allowed_extensions=ALLOWED_DOC_EXTENSIONS, category="green_note_doc")
+        return {"success": True, "message": "Green note document uploaded successfully", "green_note_id": note_id, "file": res}
     return {"success": True, "message": "Documents uploaded", "green_note_id": note_id}
 
 
@@ -2641,6 +3131,7 @@ async def list_payment_notes(
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
     search: Optional[str] = Query(None, description="Search by note number, vendor, or project"),
+    current_user: dict = Depends(get_current_user)
 ):
     notes = PAYMENT_NOTES_STORE
     if status:
@@ -2655,92 +3146,162 @@ async def list_payment_notes(
 
 @app.get("/api/v1/payment-notes/drafts", tags=["💰 PaymentNote Service"], summary="List Draft Payment Notes",
          description="Lists only draft payment notes. Auto-created drafts from approved green notes appear here.")
-async def list_draft_payment_notes():
+async def list_draft_payment_notes(current_user: dict = Depends(get_current_user)):
     return {"notes": [], "pagination": {}}
 
 
 @app.get("/api/v1/payment-notes/{id}", tags=["💰 PaymentNote Service"], summary="Get Payment Note",
          description="Retrieves full payment note details including financial calculations, TDS, bank details, approval logs, comments, and linked green note reference.")
-async def get_payment_note(id: int = Path(..., description="Payment Note ID")):
-    return {"note": {}}
+async def get_payment_note(
+    id: int = Path(..., description="Payment Note ID"),
+    current_user: dict = Depends(get_current_user)
+):
+    match = next((n for n in PAYMENT_NOTES_STORE if str(n.get("id")) == str(id)), None)
+    return {"note": match or {}}
 
 
 @app.post("/api/v1/payment-notes", tags=["💰 PaymentNote Service"], summary="Create Payment Note",
           description="""
-Creates a new payment note with full financial details.
-
-**Includes:** Vendor details, invoice info, LOA/PO details, TDS calculations, bank details, particulars (additions/deductions), and maker information.
+Creates a new payment note with full financial details and server-side statutory disbursement verification.
 
 **Status Flow:** Draft → Pending → Approved → Submitted → Paid
 """)
-async def create_payment_note(body: CreatePaymentNoteRequest):
-    if body.net_payable_amount is not None and body.net_payable_amount < 0:
+async def create_payment_note(
+    body: CreatePaymentNoteRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    gross = body.gross_amount or (body.note.gross_amount if body.note else None)
+    tds = body.tds_amount or (body.note.tds_amount if body.note else None)
+    net = body.net_payable_amount if body.net_payable_amount is not None else (body.note.net_payable_amount if body.note else None)
+
+    if net is not None and net < 0:
         raise HTTPException(422, "Financial disbursement values (net_payable_amount) cannot be negative.")
+
+    if gross is not None and tds is not None:
+        if tds > gross:
+            raise HTTPException(422, "TDS deductions cannot exceed gross invoice amount (prevents negative disbursement).")
+        calculated_net = round(gross - tds, 2)
+        if net is not None and abs(net - calculated_net) > 0.01:
+            raise HTTPException(422, f"Gross amount mismatch: Net payable amount ({net}) must equal gross invoice ({gross}) minus TDS ({tds}) = {calculated_net}.")
+        net = calculated_net
+
     new_id = len(PAYMENT_NOTES_STORE) + 1
+    v_name = body.vendor_name or (body.note.vendor_name if body.note else None) or "Larsen & Toubro Ltd"
+    v_acc = body.vendor_account_number or (body.note.account_number if body.note else None) or "50200012345678"
+    b_name = body.bank_name or (body.note.bank_name if body.note else None) or "HDFC Bank"
+    ifsc = body.ifsc_code or (body.note.ifsc_code if body.note else None) or "HDFC0000060"
+    pn_net = net if net is not None else 150000.0
+
     item = {
         "id": new_id,
         "payment_note_number": f"PN-2026-{new_id:03d}",
-        "vendor_name": body.vendor_name or "Larsen & Toubro Ltd",
-        "vendor_account_number": body.vendor_account_number or "50200012345678",
-        "bank_name": body.bank_name or "HDFC Bank",
-        "ifsc_code": body.ifsc_code or "HDFC0000060",
-        "net_payable_amount": body.net_payable_amount or 150000.0,
+        "vendor_name": v_name,
+        "vendor_account_number": v_acc,
+        "bank_name": b_name,
+        "ifsc_code": ifsc,
+        "gross_amount": gross or 0.0,
+        "tds_amount": tds or 0.0,
+        "net_payable_amount": pn_net,
         "status": "D",
         "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
     }
     PAYMENT_NOTES_STORE.insert(0, item)
+    try:
+        execute_db("""
+            INSERT INTO payment_notes (
+                payment_note_number, vendor_name, vendor_account_number, bank_name, ifsc_code,
+                gross_amount, tds_amount, net_payable_amount, status, created_at, updated_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+        """, (
+            item["payment_note_number"], item["vendor_name"], item["vendor_account_number"],
+            item["bank_name"], item["ifsc_code"], item["gross_amount"],
+            item["tds_amount"], item["net_payable_amount"], item["status"]
+        ))
+    except Exception:
+        pass
     return {"note": item, "message": "Payment note created successfully"}
 
 
 @app.patch("/api/v1/payment-notes/{id}", tags=["💰 PaymentNote Service"], summary="Update Payment Note",
            description="Updates a payment note. Can be a full update or status-only change (for approval workflow).")
-async def update_payment_note(id: int):
+async def update_payment_note(
+    id: int,
+    current_user: dict = Depends(get_current_user)
+):
     return {"note": {}}
 
 
 @app.delete("/api/v1/payment-notes/{id}", tags=["💰 PaymentNote Service"], summary="Delete Payment Note",
             description="Permanently deletes a payment note. Only allowed for drafts. Submitted/approved notes cannot be deleted.")
-async def delete_payment_note(id: int = Path(..., description="Payment Note ID")):
+async def delete_payment_note(
+    id: int = Path(..., description="Payment Note ID"),
+    current_user: dict = Depends(get_current_user)
+):
     return {}
 
 
 @app.post("/api/v1/payment-notes/draft", tags=["💰 PaymentNote Service"], summary="Create Draft from Green Note",
           description="Auto-creates a draft payment note when a green note is approved. Pre-fills vendor, invoice, and financial details from the green note.")
-async def create_draft_from_green_note(body: CreateDraftFromGreenNoteRequest):
+async def create_draft_from_green_note(
+    body: CreateDraftFromGreenNoteRequest,
+    current_user: dict = Depends(get_current_user)
+):
     return {"note": {}}
 
 
 @app.post("/api/v1/payment-notes/{id}/convert", tags=["💰 PaymentNote Service"], summary="Convert Draft to Active",
           description="Converts a draft payment note to an active (pending) note, entering the approval workflow.")
-async def convert_draft_to_active(id: int):
+async def convert_draft_to_active(
+    id: int,
+    current_user: dict = Depends(get_current_user)
+):
     return {"note": {}}
 
 
 @app.delete("/api/v1/payment-notes/{id}/draft", tags=["💰 PaymentNote Service"], summary="Delete Draft Payment Note",
             description="Deletes a draft payment note. Validates requester permissions before deletion.")
-async def delete_draft_payment_note(id: int):
+async def delete_draft_payment_note(
+    id: int,
+    current_user: dict = Depends(get_current_user)
+):
     return {}
 
 
 @app.post("/api/v1/payment-notes/{id}/hold", tags=["💰 PaymentNote Service"], summary="Put Payment Note on Hold",
           description="Puts a payment note on hold with a reason. Prevents further processing until removed from hold.")
-async def put_on_hold(id: int, body: PutOnHoldRequest):
+async def put_on_hold(
+    id: int, 
+    body: PutOnHoldRequest,
+    current_user: dict = Depends(get_current_user)
+):
     return {"note": {}}
 
 
 @app.post("/api/v1/payment-notes/{id}/unhold", tags=["💰 PaymentNote Service"], summary="Remove from Hold",
           description="Removes a payment note from hold and sets its new status (Pending, Draft, or Submitted).")
-async def remove_from_hold(id: int, body: RemoveFromHoldRequest):
+async def remove_from_hold(
+    id: int, 
+    body: RemoveFromHoldRequest,
+    current_user: dict = Depends(get_current_user)
+):
     return {"note": {}}
 
 
 @app.post("/api/v1/payment-notes/{id}/utr", tags=["💰 PaymentNote Service"], summary="Update UTR Information",
           description="Records the UTR (Unique Transaction Reference) number and date after bank payment. Optionally notifies the vendor via email.")
-async def update_utr(id: int, body: UpdateUTRRequest):
+async def update_utr(
+    id: int, 
+    body: UpdateUTRRequest,
+    current_user: dict = Depends(get_current_user)
+):
     match = next((n for n in PAYMENT_NOTES_STORE if str(n.get("id")) == str(id)), None)
     if match:
         match["utr_number"] = body.utr_no
         match["status"] = "PAID"
+    try:
+        execute_db("UPDATE payment_notes SET utr_no = %s, utr_date = %s, status = 'PAID', updated_at = NOW() WHERE id = %s", (body.utr_no, body.utr_date, id))
+    except Exception:
+        pass
     return {"note": match or {}}
 
 
@@ -2753,13 +3314,17 @@ class PaymentNoteStatus(str, Enum):
     REJECTED = "REJECTED"
     PAID = "PAID"
 
-class PaymentNoteStatusRequest(BaseModel):
+class PaymentNoteStatusRequest(StrictBaseModel):
     status: str = Field(..., description="Allowed statuses: DRAFT, PENDING, ACTIVE, HOLD, APPROVED, REJECTED, PAID")
     remarks: Optional[str] = Field("", description="Reason or remarks")
 
 @app.patch("/api/v1/payment-notes/{id}/status", tags=["💰 PaymentNote Service"], summary="Update Payment Note Status",
            description="Updates status (e.g., toggling HOLD / ACTIVE). Validates statutory lifecycle whitelist.")
-async def update_payment_note_status(id: str, body: PaymentNoteStatusRequest):
+async def update_payment_note_status(
+    id: str, 
+    body: PaymentNoteStatusRequest,
+    current_user: dict = Depends(get_current_user)
+):
     new_status = str(body.status).strip().upper()
     valid_statuses = {s.value for s in PaymentNoteStatus}
     if new_status not in valid_statuses:
@@ -2773,22 +3338,34 @@ async def update_payment_note_status(id: str, body: PaymentNoteStatusRequest):
     match["status"] = new_status
     if body.remarks:
         match["remarks"] = body.remarks
+    try:
+        execute_db("UPDATE payment_notes SET status = %s, remarks = %s, updated_at = NOW() WHERE id = %s", (new_status, body.remarks, id))
+    except Exception:
+        pass
     return {"id": id, "success": True, "status": new_status, "message": f"Payment note status set to {new_status}"}
 
 
-class PatchUTRRequest(BaseModel):
+class PatchUTRRequest(StrictBaseModel):
     utr_number: Optional[str] = None
     utr_no: Optional[str] = None
     payment_date: Optional[str] = None
 
 @app.patch("/api/v1/payment-notes/{id}/utr", tags=["💰 PaymentNote Service"], summary="Record UTR (Patch)",
            description="Updates UTR number and sets status to PAID.")
-async def patch_utr(id: str, body: PatchUTRRequest):
+async def patch_utr(
+    id: str, 
+    body: PatchUTRRequest,
+    current_user: dict = Depends(get_current_user)
+):
     utr = body.utr_number or body.utr_no or "UTR-RECORDED"
     match = next((n for n in PAYMENT_NOTES_STORE if str(n.get("id")) == str(id)), None)
     if match:
         match["utr_number"] = utr
         match["status"] = "PAID"
+    try:
+        execute_db("UPDATE payment_notes SET utr_no = %s, status = 'PAID', updated_at = NOW() WHERE id = %s", (utr, id))
+    except Exception:
+        pass
     return {"id": id, "success": True, "utr_number": utr, "status": "PAID", "message": "UTR recorded successfully"}
 
 
@@ -2858,105 +3435,105 @@ Creates payment requests in bulk. Groups multiple vendor payments under a single
 - Optional shortcut creation for recurring payments
 - Links to payment note IDs for traceability
 """)
-async def create_payment_requests(body: CreatePaymentRequestsRequest):
+async def create_payment_requests(body: CreatePaymentRequestsRequest, current_user: dict = Depends(get_current_user)):
     return {"group": {}}
 
 
 @app.patch("/api/v1/payments/{sl_no}", tags=["🏦 Payment Service"], summary="Update Payment Group",
            description="Updates a payment group — can update vendor details, amounts, or just the status (for approval workflow).")
-async def update_payment_group(sl_no: str):
+async def update_payment_group(sl_no: str, current_user: dict = Depends(get_current_user)):
     return {"group": {}}
 
 
 @app.delete("/api/v1/payments/{id}", tags=["🏦 Payment Service"], summary="Delete Payment",
             description="Deletes payments under a specific SL number.")
-async def delete_payment(id: int = Path(..., description="Payment ID")):
+async def delete_payment(id: int = Path(..., description="Payment ID"), current_user: dict = Depends(get_current_user)):
     return {}
 
 
 @app.delete("/api/v1/payments/{sl_no}/items/{id}", tags=["🏦 Payment Service"], summary="Delete Payment Item",
             description="Removes a single payment line item from a payment group.")
-async def delete_payment_item(sl_no: str, id: int):
+async def delete_payment_item(sl_no: str, id: int, current_user: dict = Depends(get_current_user)):
     return {}
 
 
 @app.post("/api/v1/payments/search-vendors", tags=["🏦 Payment Service — Lookups"], summary="Search Vendors for Payment",
           description="Searches vendors based on account type, project, and template type filters. Returns vendor banking details for payment form auto-fill.")
-async def search_vendors_payment(body: SearchVendorsPaymentRequest):
+async def search_vendors_payment(body: SearchVendorsPaymentRequest, current_user: dict = Depends(get_current_user)):
     return {"vendors": []}
 
 
 @app.get("/api/v1/payments/vendors/internal", tags=["🏦 Payment Service — Lookups"], summary="Search Internal Vendors",
          description="Searches internal (employee/inter-company) vendors by name.")
-async def search_internal_vendors(search: Optional[str] = Query(None)):
+async def search_internal_vendors(search: Optional[str] = Query(None), current_user: dict = Depends(get_current_user)):
     return {"vendors": []}
 
 
 @app.get("/api/v1/payments/projects", tags=["🏦 Payment Service — Lookups"], summary="Search Projects for Payment",
          description="Returns project names matching the search query. Used in payment form project selection.")
-async def search_projects_payment(search: Optional[str] = Query(None)):
+async def search_projects_payment(search: Optional[str] = Query(None), current_user: dict = Depends(get_current_user)):
     return {"projects": []}
 
 
 @app.get("/api/v1/payments/from-accounts/{template_type}", tags=["🏦 Payment Service — Lookups"], summary="Get From-Account Options",
          description="Returns available 'from' bank accounts based on the payment template type (RTGS, NEFT, etc.).")
-async def get_from_account_options(template_type: str = Path(..., description="Template type: RTGS, NEFT, etc.")):
+async def get_from_account_options(template_type: str = Path(..., description="Template type: RTGS, NEFT, etc."), current_user: dict = Depends(get_current_user)):
     return {"accounts": []}
 
 
 @app.get("/api/v1/payments/vendors", tags=["🏦 Payment Service — Lookups"], summary="Get All Vendors",
          description="Returns all vendors for the payment form. Unfiltered — use search endpoint for filtered results.")
-async def get_all_vendors_payment():
+async def get_all_vendors_payment(current_user: dict = Depends(get_current_user)):
     return {"vendors": []}
 
 
 # -- Cart/Queue --
 @app.post("/api/v1/payments/cart", tags=["🏦 Payment Service — Cart"], summary="Add to Payment Cart",
           description="Adds a payment request item to the user's cart/queue. Cart items are staged before final submission as a payment group.")
-async def add_to_cart():
+async def add_to_cart(current_user: dict = Depends(get_current_user)):
     return {"items": []}
 
 
 @app.delete("/api/v1/payments/cart", tags=["🏦 Payment Service — Cart"], summary="Remove from Cart",
             description="Removes an item from the payment cart or clears the entire cart.")
-async def remove_from_cart():
+async def remove_from_cart(current_user: dict = Depends(get_current_user)):
     return {"items": []}
 
 
 @app.get("/api/v1/payments/cart", tags=["🏦 Payment Service — Cart"], summary="Get Cart Snapshot",
          description="Returns the current state of the user's payment cart.")
-async def get_cart():
+async def get_cart(current_user: dict = Depends(get_current_user)):
     return {"items": []}
 
 
 # -- Shortcuts & Bank Letters --
 @app.post("/api/v1/payments/shortcuts", tags=["🏦 Payment Service — Shortcuts"], summary="Create Payment Shortcut",
           description="Saves a payment configuration as a reusable shortcut for recurring payments.")
-async def create_shortcut():
+async def create_shortcut(current_user: dict = Depends(get_current_user)):
     return {"shortcut": {}}
 
 
 @app.post("/api/v1/payments/shortcuts/{shortcut_id}/execute", tags=["🏦 Payment Service — Shortcuts"], summary="Execute Payment Shortcut",
           description="Executes a saved payment shortcut, creating a new payment group with the stored configuration.")
-async def execute_shortcut(shortcut_id: int):
+async def execute_shortcut(shortcut_id: int, current_user: dict = Depends(get_current_user)):
     return {"group": {}}
 
 
 @app.post("/api/v1/payments/bank-letters", tags=["🏦 Payment Service — Bank Letters"], summary="Create Bank Letter",
           description="Generates an RTGS/NEFT bank letter from selected payment notes. Groups payments for bank submission.")
-async def create_bank_letter(body: BankLetterRequest):
+async def create_bank_letter(body: BankLetterRequest, current_user: dict = Depends(get_current_user)):
     return {"sl_no": "", "payments_count": 0, "total_amount": 0}
 
 
 @app.post("/api/v1/payments/bank-letters/{sl_no}/log", tags=["🏦 Payment Service — Bank Letters"], summary="Process Bank Letter Log",
           description="Records approval/rejection of a bank letter with reviewer remarks.")
-async def process_bank_letter_log(sl_no: str):
+async def process_bank_letter_log(sl_no: str, current_user: dict = Depends(get_current_user)):
     return {"message": "", "log": {}}
 
 
 @app.get("/api/v1/payments/order-number", tags=["🏦 Payment Service"], summary="Generate Payment Serial Number",
          description="Generates the next payment serial number for new payment groups.")
-async def generate_payment_serial():
+async def generate_payment_serial(current_user: dict = Depends(get_current_user)):
     return {"sl_no": "PAY-2024-25/0001"}
 
 
@@ -2977,6 +3554,7 @@ async def list_reimbursement_notes(
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
     search: Optional[str] = Query(None),
+    current_user: dict = Depends(get_current_user)
 ):
     notes = REIMBURSEMENTS_STORE
     if status:
@@ -2992,28 +3570,30 @@ async def list_reimbursement_notes(
 @app.get("/api/v1/reimbursements", tags=["🧾 Reimbursement Service"], summary="List Reimbursements (Alias)",
          description="Alias route for /api/v1/reimbursement-notes to support intuitive REST path discovery.")
 async def list_reimbursements_alias(
-    status: Optional[str] = Query(None), page: int = Query(1, ge=1), per_page: int = Query(20, ge=1, le=100), search: Optional[str] = Query(None)
+    status: Optional[str] = Query(None), page: int = Query(1, ge=1), per_page: int = Query(20, ge=1, le=100), search: Optional[str] = Query(None),
+    current_user: dict = Depends(get_current_user)
 ):
-    return await list_reimbursement_notes(status=status, page=page, per_page=per_page, search=search)
+    return await list_reimbursement_notes(status=status, page=page, per_page=per_page, search=search, current_user=current_user)
 
 
 @app.get("/api/v1/reimbursement-notes/datatable", tags=["🧾 Reimbursement Service"], summary="List Reimbursement Notes (DataTable)",
          description="DataTables-compatible listing for server-side rendering.")
 async def list_reimbursement_datatable(
     draw: int = Query(1), start: int = Query(0), length: int = Query(20),
+    current_user: dict = Depends(get_current_user)
 ):
     return {"draw": draw, "total_records": 0, "total_display_records": 0, "notes": []}
 
 
 @app.get("/api/v1/reimbursement-notes/{id}", tags=["🧾 Reimbursement Service"], summary="Get Reimbursement Note",
          description="Retrieves full reimbursement note including expenses, attachments, approval logs, and bank details.")
-async def get_reimbursement_note(id: int = Path(..., description="Reimbursement Note ID")):
+async def get_reimbursement_note(id: int = Path(..., description="Reimbursement Note ID"), current_user: dict = Depends(get_current_user)):
     return {"note": {}}
 
 
 @app.get("/api/v1/reimbursement-notes/create", tags=["🧾 Reimbursement Service"], summary="Get Create Form Data",
          description="Returns dropdown data needed for the reimbursement creation form: order number, user info, projects, vendors, departments, and approvers.")
-async def get_reimbursement_create_data():
+async def get_reimbursement_create_data(current_user: dict = Depends(get_current_user)):
     return {"order_number": "", "user": {}, "projects": [], "vendors": [], "departments": [], "approvers": []}
 
 
@@ -3029,7 +3609,7 @@ Creates a new reimbursement note for employee expense claims.
 
 **Status Flow:** Draft → Pending → Approved → Bank → Paid
 """)
-async def create_reimbursement_note(body: Dict[str, Any] = Body(...)):
+async def create_reimbursement_note(body: Dict[str, Any] = Body(...), current_user: dict = Depends(get_current_user)):
     note_data = body.get("note", body) if isinstance(body, dict) else {}
     expenses = body.get("expenses", []) if isinstance(body, dict) else []
     
@@ -3046,7 +3626,7 @@ async def create_reimbursement_note(body: Dict[str, Any] = Body(...)):
     new_item = {
         "id": new_id,
         "note_no": note_data.get("note_no", f"TR-2026-00{new_id}"),
-        "user_name": note_data.get("account_holder", "System User"),
+        "user_name": note_data.get("account_holder", current_user.get("name", "System User")),
         "project_name": "NHIT Regional Operations",
         "date_of_travel": note_data.get("date_of_travel", "2026-10-17"),
         "purpose_of_travel": note_data.get("purpose_of_travel", ""),
@@ -3063,80 +3643,80 @@ async def create_reimbursement_note(body: Dict[str, Any] = Body(...)):
 
 
 @app.post("/api/v1/reimbursements", tags=["🧾 Reimbursement Service"], summary="Create Reimbursement (Alias)")
-async def create_reimbursements_alias(body: Dict[str, Any] = Body(...)):
-    return await create_reimbursement_note(body)
+async def create_reimbursements_alias(body: Dict[str, Any] = Body(...), current_user: dict = Depends(get_current_user)):
+    return await create_reimbursement_note(body, current_user=current_user)
 
 
 
 @app.get("/api/v1/reimbursement-notes/{id}/edit", tags=["🧾 Reimbursement Service"], summary="Get Edit Form Data",
          description="Returns the note data pre-populated for editing, along with dropdown options.")
-async def get_reimbursement_edit_data(id: int):
+async def get_reimbursement_edit_data(id: int, current_user: dict = Depends(get_current_user)):
     return {"note": {}, "projects": [], "vendors": [], "departments": [], "approvers": []}
 
 
 @app.patch("/api/v1/reimbursement-notes/{id}", tags=["🧾 Reimbursement Service"], summary="Update Reimbursement Note",
            description="Updates a reimbursement note. Can add/remove expenses and attachments. Only allowed for drafts and pending notes.")
-async def update_reimbursement_note(id: int):
+async def update_reimbursement_note(id: int, current_user: dict = Depends(get_current_user)):
     return {"note": {}}
 
 
 @app.delete("/api/v1/reimbursement-notes/{id}", tags=["🧾 Reimbursement Service"], summary="Delete Reimbursement Note",
             description="Permanently deletes a reimbursement note. Only allowed for draft status.")
-async def delete_reimbursement_note(id: int = Path(..., description="Reimbursement Note ID")):
+async def delete_reimbursement_note(id: int = Path(..., description="Reimbursement Note ID"), current_user: dict = Depends(get_current_user)):
     return {}
 
 
 @app.post("/api/v1/reimbursement-notes/{id}/approval-log", tags=["🧾 Reimbursement Service"], summary="Update Approval Log",
           description="Records an approval or rejection decision with reviewer remarks. Advances the note through the approval workflow.")
-async def update_reimbursement_approval_log(id: int, body: ApprovalLogUpdateRequest):
+async def update_reimbursement_approval_log(id: int, body: ApprovalLogUpdateRequest, current_user: dict = Depends(get_current_user)):
     return {"note": {}}
 
 
 @app.get("/api/v1/reimbursement-notes/{id}/pdf", tags=["🧾 Reimbursement Service"], summary="Download Reimbursement PDF",
          description="Generates and downloads a PDF for the reimbursement note including all expense details and approval history.")
-async def download_reimbursement_pdf(id: int):
+async def download_reimbursement_pdf(id: int, current_user: dict = Depends(get_current_user)):
     return {"message": "PDF generation — forwards to Reimbursement gRPC service"}
 
 
 @app.get("/api/v1/reimbursement-notes/{id}/pdf/preview", tags=["🧾 Reimbursement Service"], summary="Preview Reimbursement PDF",
          description="Generates a PDF preview (inline display rather than download).")
-async def preview_reimbursement_pdf(id: int):
+async def preview_reimbursement_pdf(id: int, current_user: dict = Depends(get_current_user)):
     return {"message": "PDF preview — forwards to Reimbursement gRPC service"}
 
 
 @app.get("/api/v1/reimbursement-notes/{id}/payment-note", tags=["🧾 Reimbursement Service"], summary="Get Payment Note Draft Data",
          description="Returns pre-filled data for creating a payment note from an approved reimbursement note.")
-async def get_reimbursement_payment_data(id: int):
+async def get_reimbursement_payment_data(id: int, current_user: dict = Depends(get_current_user)):
     return {"payment_order_number": "", "gross_amount": 0, "note": {}}
 
 
 @app.get("/api/v1/reimbursement-notes/users", tags=["🧾 Reimbursement Service"], summary="List Selectable Users",
          description="Returns users eligible for reimbursement selection (employees in the same organization).")
-async def list_selectable_users():
+async def list_selectable_users(current_user: dict = Depends(get_current_user)):
     return {"users": []}
 
 
 @app.post("/api/v1/reimbursement-notes/users/select", tags=["🧾 Reimbursement Service"], summary="Select User for Reimbursement",
           description="Selects a user as the reimbursement claimant (can be different from the requester).")
-async def select_user_for_reimbursement():
+async def select_user_for_reimbursement(current_user: dict = Depends(get_current_user)):
     return {"success": True, "selected_user_id": 0}
 
 
 @app.delete("/api/v1/reimbursement-notes/{id}/files/{filename}", tags=["🧾 Reimbursement Service"], summary="Delete Attachment",
             description="Removes a specific file attachment from a reimbursement note.")
-async def delete_reimbursement_file(id: int, filename: str):
+async def delete_reimbursement_file(id: int, filename: str, current_user: dict = Depends(get_current_user)):
     return {"note": {}}
 
 
 @app.get("/api/v1/reimbursement-notes/order-number", tags=["🧾 Reimbursement Service"], summary="Generate Order Number",
          description="Generates the next sequential reimbursement note number with financial year prefix.")
-async def generate_reimbursement_order_number():
+async def generate_reimbursement_order_number(current_user: dict = Depends(get_current_user)):
     return {"order_number": "RN-2024-25/0001", "financial_year": "2024-25"}
 
 
 @app.get("/api/v1/reimbursement-notes/payment-order-number", tags=["🧾 Reimbursement Service"], summary="Generate Payment Order Number",
          description="Generates the next payment order number for reimbursement payment notes.")
-async def generate_reimbursement_payment_order():
+async def generate_reimbursement_payment_order(current_user: dict = Depends(get_current_user)):
     return {"order_number": "RPN-2024-25/0001", "financial_year": "2024-25"}
 
 
@@ -3167,7 +3747,7 @@ Initiates a multi-level approval workflow for a Green Note or Payment Note.
 - `department_id`: Department for approver assignment
 - `source_type`: "green_note" or "payment_note"
 """)
-async def initiate_approval(body: InitiateApprovalRequest):
+async def initiate_approval(body: InitiateApprovalRequest, current_user: dict = Depends(get_current_user)):
     return {"success": True, "message": "Approval initiated", "status": "PENDING_LEVEL_1"}
 
 

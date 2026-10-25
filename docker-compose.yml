@@ -54,6 +54,7 @@ services:
     container_name: nhit-gateway
     restart: always
     environment:
+      - ENVIRONMENT=${ENVIRONMENT:-production}
       - DB_HOST=postgres
       - DB_PORT=5432
       - DB_NAME=nhit_db
@@ -68,10 +69,15 @@ services:
       - SMTP_USER=${SMTP_USER:-}
       - SMTP_PASSWORD=${SMTP_PASSWORD:-}
       - SMTP_FROM_NAME=${SMTP_FROM_NAME:-NHIT Enterprise Security}
+      - RATE_LIMIT_AUTH_MAX=${RATE_LIMIT_AUTH_MAX:-5}
+      - RATE_LIMIT_AUTH_WINDOW=${RATE_LIMIT_AUTH_WINDOW:-60}
+      - RATE_LIMIT_PUBLIC_MAX=${RATE_LIMIT_PUBLIC_MAX:-60}
+      - RATE_LIMIT_USER_MAX=${RATE_LIMIT_USER_MAX:-180}
+      - MAX_UPLOAD_SIZE_MB=${MAX_UPLOAD_SIZE_MB:-10}
     expose:
       - "8080"
     ports:
-      - "8080:8080"  # Direct gateway access
+      - "127.0.0.1:8080:8080"  # Direct gateway restricted to localhost; external clients must use Nginx proxy
     depends_on:
       postgres:
         condition: service_healthy
@@ -90,7 +96,7 @@ services:
       POSTGRES_PASSWORD: shristi
       POSTGRES_DB: nhit_db
     ports:
-      - "5433:5432"  # Exposed on 5433 to avoid local port 5432 conflicts
+      - "127.0.0.1:5433:5432"  # Bound strictly to loopback interface 127.0.0.1 to prevent external network exposure
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./NHIT Backend/scripts/consolidated-migrations.sql:/docker-entrypoint-initdb.d/01-migrations.sql

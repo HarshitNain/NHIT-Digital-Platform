@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"os"
-	"time"
 
 
 	authpb "github.com/ShristiRnr/NHIT_Backend/api/pb/authpb"
@@ -59,17 +57,6 @@ func (i *RBACInterceptor) UnaryServerInterceptor() grpc.UnaryServerInterceptor {
 
 		// Extract token from metadata
 		md, ok := metadata.FromIncomingContext(ctx)
-		
-		// Temporary file logging for Windows debugging
-		f, _ := os.OpenFile("rbac_debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if f != nil {
-			var keys []string
-			for k := range md {
-				keys = append(keys, k)
-			}
-			fmt.Fprintf(f, "[%s] RBAC: Method=%s, MetadataPresent=%v, Keys=%v\n", time.Now().Format(time.RFC3339), info.FullMethod, ok, keys)
-			f.Close()
-		}
 
 		if !ok {
 			fmt.Printf("DEBUG RBAC: Metadata NOT provided\n")

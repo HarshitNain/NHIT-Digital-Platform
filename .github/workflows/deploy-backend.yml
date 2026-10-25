@@ -1,0 +1,47 @@
+name: 🚀 Deploy Backend to Render
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'NHIT Backend/**'
+      - '.github/workflows/deploy-backend.yml'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Trigger Render Deploy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Trigger Render Deploy Hook
+        run: |
+          echo "Triggering Render deploy..."
+          response=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST \
+            "${{ secrets.RENDER_DEPLOY_HOOK_URL }}")
+          echo "Render deploy hook response: $response"
+          if [ "$response" = "200" ] || [ "$response" = "201" ]; then
+            echo "✅ Render deploy triggered successfully!"
+          else
+            echo "❌ Render deploy hook returned $response"
+            exit 1
+          fi
+
+      - name: Wait for backend to be healthy
+        run: |
+          echo "Waiting 60s for Render to start building..."
+          sleep 60
+          echo "Polling health endpoint..."
+          for i in $(seq 1 10); do
+            response=$(curl -s -o /dev/null -w "%{http_code}" \
+              --max-time 30 \
+              "${{ vars.RENDER_BACKEND_URL }}/health" || echo "000")
+            echo "Attempt $i: $response"
+            if [ "$response" = "200" ]; then
+              echo "✅ Backend is healthy!"
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "⚠️ Backend health check timed out (deploy may still be in progress)"

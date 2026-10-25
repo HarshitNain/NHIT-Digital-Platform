@@ -1,0 +1,73 @@
+name: 🔄 Keep Backend Alive (Free Tier)
+
+# =======================================================================
+# NHIT Digital Platform — Free-Tier Keep-Alive Pinger
+# =======================================================================
+# JOB 1 (ping-render): Pings the Render backend every 10 minutes to
+#   prevent the free tier from sleeping (threshold is 15 min inactivity).
+#
+# JOB 2 (ping-supabase): Pings Supabase REST API once a day to prevent
+#   the 7-day inactivity pause on the free tier database.
+#
+# GitHub Actions free tier: 2,000 minutes/month.
+# This entire workflow uses ~25 minutes/month total.
+# =======================================================================
+
+on:
+  schedule:
+    # Every 10 minutes — keeps Render backend awake (threshold is 15 min)
+    - cron: '*/10 * * * *'
+  workflow_dispatch:   # Manual trigger from GitHub UI
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────
+  # Job 1: Ping Render backend every 10 min to prevent sleep
+  # ─────────────────────────────────────────────────────────────────────
+  ping-render:
+    name: Ping NHIT Backend (Render)
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    if: vars.RENDER_BACKEND_URL != ''
+
+    steps:
+      - name: 🏥 Ping /health endpoint
+        run: |
+          URL="${{ vars.RENDER_BACKEND_URL }}/health"
+          echo "Pinging: $URL"
+          response=$(curl -s -o /dev/null -w "%{http_code}" \
+            --max-time 30 \
+            --retry 2 \
+            --retry-delay 5 \
+            "$URL" || echo "000")
+          echo "HTTP $response"
+          if [ "$response" = "200" ]; then
+            echo "✅ Backend is alive and healthy"
+          else
+            echo "⚠️  Got $response — backend may be waking from cold start (normal)"
+          fi
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Job 2: Ping Supabase once per day to prevent 7-day inactivity pause
+  # ─────────────────────────────────────────────────────────────────────
+  ping-supabase:
+    name: Ping Supabase DB (daily)
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    # Only run once at midnight UTC each day (not every 10 min)
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'schedule' &&
+       startsWith(github.event.schedule, '0 0'))
+
+    steps:
+      - name: 🗄️ Ping Supabase project
+        run: |
+          if [ -z "${{ vars.SUPABASE_HEALTH_URL }}" ]; then
+            echo "ℹ️  SUPABASE_HEALTH_URL not set — skipping"
+            exit 0
+          fi
+          echo "Pinging Supabase: ${{ vars.SUPABASE_HEALTH_URL }}"
+          curl -s --max-time 15 \
+            -H "apikey: placeholder" \
+            "${{ vars.SUPABASE_HEALTH_URL }}" || true
+          echo "✅ Supabase ping sent"

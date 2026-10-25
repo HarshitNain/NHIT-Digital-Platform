@@ -33,8 +33,19 @@ Thumbs.db
 
 # Secrets & Environment variables
 .env
+.env.*
+*.env
+**/.env
+**/.env.*
+**/*.env
 .env.local
 .env.*.local
+*.key
+*.pem
+*.cert
+*.crt
+!*.env.example
+!**/*.env.example
 
 # Compiled binaries and executables
 *.exe
@@ -42,6 +53,8 @@ Thumbs.db
 *.dylib
 *.bin
 bin/
+payment-server
+**/payment-server
 
 # Test Harness Generated Reports
 harness/reports/*.html

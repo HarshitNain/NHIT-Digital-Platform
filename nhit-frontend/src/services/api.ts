@@ -13,17 +13,39 @@ import {
   LoginResponse,
 } from '../types';
 
-const BASE_URL = '/api/v1';
+// In production (Vercel), __API_BASE__ is injected by vite.config.ts from
+// the VITE_API_GATEWAY_URL env var (e.g., https://nhit-api.onrender.com).
+// In local dev (no env var), Vite's proxy routes /api/* -> http://localhost:8080.
+declare const __API_BASE__: string;
+const BASE_URL = (typeof __API_BASE__ !== 'undefined' && __API_BASE__)
+  ? `${__API_BASE__}/api/v1`
+  : '/api/v1';
+
+
+let cachedToken: string | null = null;
 
 export function getAuthToken(): string | null {
-  return localStorage.getItem('nhit_auth_token');
+  if (cachedToken) return cachedToken;
+  try {
+    cachedToken = sessionStorage.getItem('nhit_session_token') || localStorage.getItem('nhit_auth_token');
+    return cachedToken;
+  } catch {
+    return null;
+  }
 }
 
 export function setAuthToken(token: string | null) {
-  if (token) {
-    localStorage.setItem('nhit_auth_token', token);
-  } else {
-    localStorage.removeItem('nhit_auth_token');
+  cachedToken = token;
+  try {
+    if (token) {
+      sessionStorage.setItem('nhit_session_token', token);
+      localStorage.removeItem('nhit_auth_token'); // Clean up persistent localStorage
+    } else {
+      sessionStorage.removeItem('nhit_session_token');
+      localStorage.removeItem('nhit_auth_token');
+    }
+  } catch {
+    // Graceful fallback for strict storage environments
   }
 }
 

@@ -1,0 +1,48 @@
+name: 🚀 Deploy Frontend to Vercel
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'nhit-frontend/**'
+      - '.github/workflows/deploy-frontend.yml'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Build & Deploy to Vercel
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: nhit-frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: nhit-frontend
+        run: npm ci
+
+      - name: TypeScript check
+        working-directory: nhit-frontend
+        run: npx tsc --noEmit
+
+      - name: Build for production
+        working-directory: nhit-frontend
+        env:
+          VITE_API_GATEWAY_URL: ${{ vars.RENDER_BACKEND_URL }}
+        run: npm run build
+
+      - name: Deploy to Vercel
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          working-directory: nhit-frontend
+          vercel-args: '--prod'

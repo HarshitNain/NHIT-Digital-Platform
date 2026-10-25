@@ -154,7 +154,7 @@ func (c *KafkaConsumer) handleApprovalMessage(ctx context.Context, m kafka.Messa
 
 	note := resp.GetNote()
 	if note == nil || note.LoaPoNo == "" {
-		log.Printf("⚠️ PaymentNote %d has no PO number, skipping", event.SourceID)
+		log.Printf("⚠️ PaymentNote %s has no PO number, skipping", event.SourceID)
 		return
 	}
 
