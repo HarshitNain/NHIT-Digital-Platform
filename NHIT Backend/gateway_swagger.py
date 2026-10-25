@@ -3782,4 +3782,5 @@ if __name__ == "__main__":
     print("  ReDoc     : http://localhost:8080/redoc")
     print("  OpenAPI   : http://localhost:8080/openapi.json")
     print("=" * 70)
-    uvicorn.run(app, host="0.0.0.0", port=8080)
+    port = int(os.environ.get("PORT", 8080))
+    uvicorn.run(app, host="0.0.0.0", port=port)
