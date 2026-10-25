@@ -294,6 +294,37 @@ export const LoginView: React.FC<LoginViewProps> = ({
     }
   };
 
+  const handleQuickDemoLogin = async () => {
+    setEmail('admin@nhit.com');
+    setPassword('password123');
+    setEnable2FA(false);
+    setLoading(true);
+    setErrorMsg('');
+    try {
+      const res = await api.login({
+        login: 'admin@nhit.com',
+        password: 'password123',
+        enable_2fa: false,
+      });
+      if (res.token) {
+        setAuthToken(res.token);
+        onLoginSuccess({
+          user_id: res.user_id!,
+          email: res.email!,
+          name: res.name || 'NHIT Super Administrator',
+          roles: res.roles || ['super_admin'],
+          permissions: res.permissions || ['*'],
+          auth_method: 'password',
+          portalMode,
+        });
+      }
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Demo login failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // OTP Digit Input Handlers
   const handleDigitChange = (index: number, val: string) => {
     const cleanVal = val.replace(/[^0-9]/g, '');
@@ -434,6 +465,33 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 />
               </svg>
               <span>Continue with Google Enterprise SSO</span>
+            </button>
+
+            {/* Quick Demo Access Button */}
+            <button
+              type="button"
+              className="quick-demo-login-btn"
+              onClick={handleQuickDemoLogin}
+              disabled={loading}
+              style={{
+                marginTop: '10px',
+                width: '100%',
+                padding: '11px 16px',
+                background: 'linear-gradient(135deg, rgba(56, 189, 248, 0.12), rgba(99, 102, 241, 0.15))',
+                border: '1px solid rgba(56, 189, 248, 0.5)',
+                borderRadius: '8px',
+                color: '#38bdf8',
+                fontWeight: 600,
+                fontSize: '13px',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '8px',
+                transition: 'all 0.2s ease',
+              }}
+            >
+              <span>⚡ 1-Click Demo Sign-In (Super Admin)</span>
             </button>
 
             <div className="auth-divider">
