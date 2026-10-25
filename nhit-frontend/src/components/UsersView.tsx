@@ -303,7 +303,7 @@ export const UsersView: React.FC<UsersViewProps> = ({ users, loading, onOpenCrea
                                 color: 'var(--primary-light)',
                                 display: 'flex',
                                 alignItems: 'center',
-                                justifyCenter: 'center',
+                                justifyContent: 'center',
                                 fontSize: '0.75rem',
                                 fontWeight: 700,
                               }}

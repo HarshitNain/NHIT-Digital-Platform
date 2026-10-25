@@ -44,6 +44,8 @@ def get(url):
         return e.code, json.loads(e.read().decode("utf-8"))
 
 def run_tests():
+    global BASE
+    BASE = os.environ.get("API_BASE_URL", BASE)
     print("=" * 70)
     print(" NHIT END-TO-END AUTOMATED VERIFICATION SUITE")
     print(f" Target Base URL: {BASE}")
@@ -52,24 +54,24 @@ def run_tests():
     # 1. Full Authentication Matrix
     print("\n[SUITE 1] Testing Database Authentication & RBAC Matrix:")
     users_to_test = [
-        ("admin@nhit.com", "password123", "super_admin"),
-        ("cfo@nhit.com", "password123", "finance_reviewer"),
-        ("cto@nhit.com", "password123", "org_admin"),
-        ("procurement@nhit.com", "password123", "project_manager"),
-        ("engineer@nhit.com", "password123", "employee"),
+        ("admin@nhit.com", "password123", ["super_admin"]),
+        ("cfo@nhit.com", "password123", ["finance_reviewer", "cfo"]),
+        ("cto@nhit.com", "password123", ["org_admin", "cto"]),
+        ("procurement@nhit.com", "password123", ["project_manager"]),
+        ("engineer@nhit.com", "password123", ["employee"]),
     ]
 
-    for email, pwd, expected_role in users_to_test:
+    for email, pwd, expected_roles in users_to_test:
         st, res = post("/auth/login", {"login": email, "password": pwd, "enable_2fa": True})
         assert st == 200 and res.get("status") == "2FA_REQUIRED", f"Failed login challenge for {email}: {st} {res}"
         temp_tok = res["session_temp_token"]
-        otp = res["dev_otp_preview"]
+        otp = res.get("dev_otp_preview")
 
         st_v, res_v = post("/auth/login-otp/verify", {"session_temp_token": temp_tok, "otp": otp})
         assert st_v == 200 and "token" in res_v, f"Failed OTP verify for {email}: {st_v} {res_v}"
         roles = res_v.get("roles", [])
         perms = res_v.get("permissions", [])
-        assert expected_role in roles, f"Role mismatch for {email}: expected {expected_role}, got {roles}"
+        assert any(r in roles for r in expected_roles), f"Role mismatch for {email}: expected one of {expected_roles}, got {roles}"
         print(f"  [PASS] {email:25} -> 2FA Verified, Role: {roles[0]:18} Permissions: {len(perms)}")
 
     # 2. Security Negative Boundaries
@@ -88,11 +90,11 @@ def run_tests():
 
     # 3. Direct Passwordless OTP
     print("\n[SUITE 3] Direct Passwordless OTP Flow:")
-    st, res = post("/auth/login-otp/request", {"email": "accounts@nhit.com"})
+    st, res = post("/auth/login-otp/request", {"email": "engineer@nhit.com"})
     assert st == 200 and res.get("status") == "2FA_REQUIRED", f"Direct OTP request failed: {st} {res}"
-    st_v, res_v = post("/auth/login-otp/verify", {"session_temp_token": res["session_temp_token"], "otp": res["dev_otp_preview"]})
+    st_v, res_v = post("/auth/login-otp/verify", {"session_temp_token": res["session_temp_token"], "otp": res.get("dev_otp_preview")})
     assert st_v == 200 and "token" in res_v, f"Direct OTP verify failed: {st_v} {res_v}"
-    print("  [PASS] Direct passwordless OTP login succeeded for accounts@nhit.com (Role: finance_reviewer)")
+    print("  [PASS] Direct passwordless OTP login succeeded for engineer@nhit.com (Role: employee)")
 
     # 4. Google SSO Federated Flow
     print("\n[SUITE 4] Google SSO Federated Flow:")

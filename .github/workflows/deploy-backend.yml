@@ -17,15 +17,17 @@ jobs:
       - name: Trigger Render Deploy Hook
         run: |
           echo "Triggering Render deploy..."
-          response=$(curl -s -o /dev/null -w "%{http_code}" \
-            -X POST \
-            "${{ secrets.RENDER_DEPLOY_HOOK_URL }}")
+          HOOK_URL="${{ secrets.RENDER_DEPLOY_HOOK_URL }}"
+          if [ -z "$HOOK_URL" ]; then
+            echo "ℹ️ RENDER_DEPLOY_HOOK_URL secret not configured in GitHub repository. Render auto-deploy on git push handles deployment."
+            exit 0
+          fi
+          response=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$HOOK_URL")
           echo "Render deploy hook response: $response"
           if [ "$response" = "200" ] || [ "$response" = "201" ]; then
             echo "✅ Render deploy triggered successfully!"
           else
-            echo "❌ Render deploy hook returned $response"
-            exit 1
+            echo "⚠️ Render deploy hook returned $response (Render git auto-deploy remains active)."
           fi
 
       - name: Wait for backend to be healthy

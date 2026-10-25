@@ -9,9 +9,22 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BACKEND_DIR = os.path.join(BASE_DIR, "NHIT Backend")
 TESTS_DIR = os.path.join(BASE_DIR, "tests")
 
+import socket
+
+def find_available_port(start_port=8080):
+    for p in range(start_port, start_port + 50):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            if s.connect_ex(('127.0.0.1', p)) != 0:
+                return p
+    return start_port
+
 # Configure environment for testing
+TARGET_PORT = find_available_port(int(os.environ.get("PORT", "8080")))
 os.environ["ENVIRONMENT"] = "test"
-os.environ["API_BASE_URL"] = "http://127.0.0.1:8080/api/v1"
+os.environ["ENABLE_DEV_OTP_PREVIEW"] = "true"
+os.environ["PORT"] = str(TARGET_PORT)
+os.environ["API_BASE_URL"] = f"http://127.0.0.1:{TARGET_PORT}/api/v1"
+
 if "DB_HOST" not in os.environ:
     os.environ["DB_HOST"] = "127.0.0.1"
 if "DB_PORT" not in os.environ:
@@ -52,11 +65,11 @@ def main():
 
     # 2. Start Uvicorn in a daemon thread
     import uvicorn
-    print("Starting Uvicorn HTTP server on 127.0.0.1:8080...", flush=True)
+    print(f"Starting Uvicorn HTTP server on 127.0.0.1:{TARGET_PORT}...", flush=True)
     config = uvicorn.Config(
         gateway_swagger.app,
         host="127.0.0.1",
-        port=8080,
+        port=TARGET_PORT,
         log_level="info"
     )
     server = uvicorn.Server(config)
@@ -74,7 +87,7 @@ def main():
     server_thread.start()
 
     # 3. Wait for HTTP readiness
-    health_url = "http://127.0.0.1:8080/api/v1/health"
+    health_url = f"http://127.0.0.1:{TARGET_PORT}/api/v1/health"
     ready = False
     print(f"Polling readiness endpoint at {health_url}...", flush=True)
     for i in range(25):
