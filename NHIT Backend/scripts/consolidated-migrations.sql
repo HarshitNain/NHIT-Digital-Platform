@@ -149,6 +149,27 @@ CREATE TABLE IF NOT EXISTS email_verification_tokens (
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
+-- Access Requests Table (Admin Approval & Onboarding Gateway)
+CREATE TABLE IF NOT EXISTS access_requests (
+    request_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name VARCHAR(255) NOT NULL,
+    email VARCHAR(255) NOT NULL,
+    phone VARCHAR(50),
+    requested_role VARCHAR(100) DEFAULT 'Full Administrator Access',
+    department VARCHAR(255) DEFAULT 'General Operations',
+    reason TEXT DEFAULT '',
+    status VARCHAR(50) NOT NULL DEFAULT 'PENDING_APPROVAL',
+    approved_by VARCHAR(255),
+    approved_role VARCHAR(100),
+    activation_otp VARCHAR(20),
+    otp_expires_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_access_requests_email ON access_requests(email);
+CREATE INDEX IF NOT EXISTS idx_access_requests_status ON access_requests(status);
+
 -- ================================================
 -- DEPARTMENT SERVICE TABLES
 -- ================================================
