@@ -57,8 +57,13 @@ DB_CONFIG = {
     "password": os.environ.get("DB_PASSWORD", "shristi"),
 }
 
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+
 def get_db():
-    conn = psycopg2.connect(**DB_CONFIG)
+    if DATABASE_URL:
+        conn = psycopg2.connect(DATABASE_URL)
+    else:
+        conn = psycopg2.connect(**DB_CONFIG)
     conn.autocommit = True
     return conn
 
