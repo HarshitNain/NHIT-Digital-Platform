@@ -18,12 +18,12 @@ ON CONFLICT (org_id) DO NOTHING;
 -- ================================================
 
 -- Insert test departments
-INSERT INTO departments (id, name, description) VALUES
-    ('650e8400-e29b-41d4-a716-446655440001', 'Engineering', 'Software development and engineering team'),
-    ('650e8400-e29b-41d4-a716-446655440002', 'Human Resources', 'HR and people operations'),
-    ('650e8400-e29b-41d4-a716-446655440003', 'Finance', 'Financial planning and accounting'),
-    ('650e8400-e29b-41d4-a716-446655440004', 'Marketing', 'Marketing and business development'),
-    ('650e8400-e29b-41d4-a716-446655440005', 'Operations', 'Business operations and support')
+INSERT INTO departments (id, org_id, name, description) VALUES
+    ('650e8400-e29b-41d4-a716-446655440001', '550e8400-e29b-41d4-a716-446655440001', 'Engineering', 'Software development and engineering team'),
+    ('650e8400-e29b-41d4-a716-446655440002', '550e8400-e29b-41d4-a716-446655440001', 'Human Resources', 'HR and people operations'),
+    ('650e8400-e29b-41d4-a716-446655440003', '550e8400-e29b-41d4-a716-446655440001', 'Finance', 'Financial planning and accounting'),
+    ('650e8400-e29b-41d4-a716-446655440004', '550e8400-e29b-41d4-a716-446655440001', 'Marketing', 'Marketing and business development'),
+    ('650e8400-e29b-41d4-a716-446655440005', '550e8400-e29b-41d4-a716-446655440001', 'Operations', 'Business operations and support')
 ON CONFLICT (name) DO NOTHING;
 
 -- ================================================
@@ -31,11 +31,11 @@ ON CONFLICT (name) DO NOTHING;
 -- ================================================
 
 -- Insert test designations with hierarchy
-INSERT INTO designations (id, name, description) VALUES
-    ('750e8400-e29b-41d4-a716-446655440001', 'Chief Executive Officer', 'CEO - Top executive position'),
-    ('750e8400-e29b-41d4-a716-446655440002', 'Chief Technology Officer', 'CTO - Technology leadership'),
-    ('750e8400-e29b-41d4-a716-446655440003', 'Engineering Manager', 'Manager for engineering teams')
-ON CONFLICT (slug) DO NOTHING;
+INSERT INTO designations (id, org_id, name, description) VALUES
+    ('750e8400-e29b-41d4-a716-446655440001', '550e8400-e29b-41d4-a716-446655440001', 'Chief Executive Officer', 'CEO - Top executive position'),
+    ('750e8400-e29b-41d4-a716-446655440002', '550e8400-e29b-41d4-a716-446655440001', 'Chief Technology Officer', 'CTO - Technology leadership'),
+    ('750e8400-e29b-41d4-a716-446655440003', '550e8400-e29b-41d4-a716-446655440001', 'Engineering Manager', 'Manager for engineering teams')
+ON CONFLICT (id) DO NOTHING;
 
 -- ================================================
 -- USERS
@@ -108,14 +108,6 @@ INSERT INTO vendor_accounts (id, vendor_id, account_name, account_number, accoun
     ('b50e8400-e29b-41d4-a716-446655440003', 'a50e8400-e29b-41d4-a716-446655440003', 'Office Supplies Co', '3456789012345678', 'Savings', 'ICICI Bank', 'Delhi Branch', 'ICIC0000003', true, true, '850e8400-e29b-41d4-a716-446655440001')
 ON CONFLICT (id) DO NOTHING;
 
--- ================================================
--- UPDATE DESIGNATION USER COUNTS
--- ================================================
-
--- Update user counts for designations
-UPDATE designations SET user_count = (
-    SELECT COUNT(*) FROM users WHERE designation_id = designations.id
-);
 
 -- ================================================
 -- SEED DATA COMPLETE
