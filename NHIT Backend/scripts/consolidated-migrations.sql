@@ -399,22 +399,26 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- Triggers for organizations
+DROP TRIGGER IF EXISTS update_organizations_updated_at ON organizations;
 CREATE TRIGGER update_organizations_updated_at
     BEFORE UPDATE ON organizations
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_user_organizations_updated_at ON user_organizations;
 CREATE TRIGGER update_user_organizations_updated_at
     BEFORE UPDATE ON user_organizations
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 
 -- Triggers for vendors
+DROP TRIGGER IF EXISTS trigger_vendors_updated_at ON vendors;
 CREATE TRIGGER trigger_vendors_updated_at
     BEFORE UPDATE ON vendors
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 
+DROP TRIGGER IF EXISTS trigger_vendor_accounts_updated_at ON vendor_accounts;
 CREATE TRIGGER trigger_vendor_accounts_updated_at
     BEFORE UPDATE ON vendor_accounts
     FOR EACH ROW
@@ -437,6 +441,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trigger_ensure_single_primary_account ON vendor_accounts;
 CREATE TRIGGER trigger_ensure_single_primary_account
     BEFORE INSERT OR UPDATE ON vendor_accounts
     FOR EACH ROW
