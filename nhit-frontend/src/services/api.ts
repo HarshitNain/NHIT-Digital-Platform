@@ -64,7 +64,7 @@ async function fetchJSON<T>(endpoint: string, options?: RequestInit): Promise<T>
     headers,
   });
   if (!res.ok) {
-    if (res.status === 401 && endpoint !== '/auth/login' && endpoint !== '/auth/login-otp/verify') {
+    if (res.status === 401 && endpoint !== '/auth/login' && endpoint !== '/auth/login-otp/verify' && token) {
       setAuthToken(null);
       localStorage.removeItem('nhit_auth_user');
       window.dispatchEvent(new CustomEvent('nhit:auth_expired', {

@@ -251,7 +251,11 @@ export function App() {
     }
   }, [selectedOrgId]);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => {
+    if (isAuthenticated) {
+      loadData();
+    }
+  }, [isAuthenticated, loadData]);
 
   // ---- Action Handlers ----
   const handleApproveGreenNote = async (id: string, status: string, remarks: string) => {
