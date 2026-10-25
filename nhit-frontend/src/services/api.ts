@@ -11,6 +11,7 @@ import {
   ReimbursementNote,
   ServiceHealth,
   LoginResponse,
+  AccessRequest,
 } from '../types';
 
 // In production (Vercel), __API_BASE__ is injected by vite.config.ts from
@@ -127,6 +128,44 @@ export const api = {
     }>('/auth/validate-token', {
       method: 'POST',
       body: JSON.stringify({ token }),
+    }),
+
+  // Access Requests & Admin Approval Workflow
+  submitAccessRequest: (data: {
+    name: string;
+    email: string;
+    phone?: string;
+    requested_role?: string;
+    department?: string;
+    reason?: string;
+  }) =>
+    fetchJSON<{ status: string; message: string; email: string }>('/auth/access-request', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  registerWithApprovedOTP: (data: { email: string; otp: string; password: string }) =>
+    fetchJSON<LoginResponse>('/auth/register-approved', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  getAccessRequests: async (status?: string) => {
+    const query = status ? `?status=${encodeURIComponent(status)}` : '';
+    const res = await fetchJSON<{ requests: AccessRequest[]; total: number; pending_count: number }>(`/admin/access-requests${query}`);
+    return res.requests || [];
+  },
+
+  approveAccessRequest: (requestId: string, data: { granted_role: string; department?: string }) =>
+    fetchJSON<{ success: boolean; status: string; message: string; activation_otp?: string }>(`/admin/access-requests/${requestId}/approve`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  rejectAccessRequest: (requestId: string, reason?: string) =>
+    fetchJSON<{ success: boolean; status: string; message: string }>(`/admin/access-requests/${requestId}/reject`, {
+      method: 'POST',
+      body: JSON.stringify({ reason: reason || 'Administrative discretion' }),
     }),
 
   // System Health

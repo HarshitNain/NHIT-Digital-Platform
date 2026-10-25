@@ -44,7 +44,12 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, File
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, Field, ConfigDict
 
-from otp_notifier import dispatch_otp
+from otp_notifier import (
+    dispatch_otp,
+    notify_admin_access_request,
+    notify_user_access_approved,
+    notify_user_access_rejected
+)
 
 # ═══════════════════════════════════════════════════════
 # DATABASE CONNECTION
@@ -97,19 +102,21 @@ def query_db(sql, params=None):
             conn.close()
     except Exception as e:
         print(f"[DB_FALLBACK] Query error on '{sql[:60]}...': {e}", flush=True)
-        # Resilient fallback for user lookup so demos/prototypes remain functional even if network times out
+        # Resilient fallback strictly for authorized admin so admin login functions if network times out
         if "FROM users" in sql:
-            clean_email = str(params[0] if params and len(params) > 0 else "admin@nhit.com").strip().lower()
-            return [{
-                "user_id": "850e8400-e29b-41d4-a716-446655440001",
-                "name": "NHIT Super Administrator" if "admin" in clean_email else clean_email.split("@")[0].title(),
-                "email": clean_email,
-                "password": "$2a$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi",
-                "tenant_id": "550e8400-e29b-41d4-a716-446655440000",
-                "department_id": None,
-                "designation_id": None,
-                "must_change_password": False
-            }]
+            clean_email = str(params[0] if params and len(params) > 0 else "").strip().lower()
+            if clean_email in ("admin@nhit.com", "admin@nhit.gov.in"):
+                return [{
+                    "user_id": "850e8400-e29b-41d4-a716-446655440001",
+                    "name": "NHIT Super Administrator",
+                    "email": clean_email,
+                    "password": "$2a$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi",
+                    "tenant_id": "550e8400-e29b-41d4-a716-446655440000",
+                    "department_id": None,
+                    "designation_id": None,
+                    "must_change_password": False
+                }]
+            return []
         raise
 
 def execute_db(sql, params=None):
@@ -310,6 +317,58 @@ RATE_LIMIT_STORE: Dict[str, List[float]] = defaultdict(list)
 
 def clean_expired_otps():
     otp_store.clean_expired()
+
+# ═══════════════════════════════════════════════════════
+# ACCESS REQUESTS REPOSITORY & STATE (Admin Approval Workflow)
+# ═══════════════════════════════════════════════════════
+ACCESS_REQUESTS_CACHE: List[dict] = []
+ACCESS_REQUESTS_LOCK = threading.Lock()
+_ACCESS_REQ_DB_INITED = False
+
+def init_access_requests_table():
+    global _ACCESS_REQ_DB_INITED
+    if _ACCESS_REQ_DB_INITED:
+        return
+    try:
+        execute_db("""
+            CREATE TABLE IF NOT EXISTS access_requests (
+                request_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                name VARCHAR(255) NOT NULL,
+                email VARCHAR(255) NOT NULL,
+                phone VARCHAR(50),
+                requested_role VARCHAR(100) DEFAULT 'Full Administrator Access',
+                department VARCHAR(255) DEFAULT 'General Operations',
+                reason TEXT DEFAULT '',
+                status VARCHAR(50) NOT NULL DEFAULT 'PENDING_APPROVAL',
+                approved_by VARCHAR(255),
+                approved_role VARCHAR(100),
+                activation_otp VARCHAR(20),
+                otp_expires_at TIMESTAMPTZ,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            );
+            CREATE INDEX IF NOT EXISTS idx_access_requests_email ON access_requests(email);
+            CREATE INDEX IF NOT EXISTS idx_access_requests_status ON access_requests(status);
+        """)
+        _ACCESS_REQ_DB_INITED = True
+    except Exception as e:
+        print(f"[ACCESS_REQ_INIT] Table setup notice: {e}", flush=True)
+
+def get_access_requests_store() -> List[dict]:
+    init_access_requests_table()
+    try:
+        rows = query_db("""
+            SELECT request_id, name, email, phone, requested_role, department, reason,
+                   status, approved_by, approved_role, activation_otp, created_at, updated_at
+            FROM access_requests
+            ORDER BY created_at DESC
+        """)
+        if rows:
+            return rows
+    except Exception:
+        pass
+    with ACCESS_REQUESTS_LOCK:
+        return list(ACCESS_REQUESTS_CACHE)
 
 # ═══════════════════════════════════════════════════════
 # 1. RATE LIMITING & ABUSE MITIGATION (Vibecode Checklist Item 1)
@@ -1149,6 +1208,28 @@ class ActivityLogRequest(StrictBaseModel):
     name: str = Field(..., description="Activity name e.g. 'User logged in with email user@example.com'")
     description: str = Field("", description="Activity description")
 
+# ---- Access Request Models (Admin Approval Flow) ----
+class AccessRequestSubmit(StrictBaseModel):
+    name: str = Field(..., min_length=2, max_length=255, description="Full name of applicant")
+    email: str = Field(..., description="Official email address of applicant")
+    phone: Optional[str] = Field(None, description="Mobile number")
+    requested_role: Optional[str] = Field("Full Administrator Access", description="Requested access role")
+    department: Optional[str] = Field("General Operations", description="Department")
+    reason: Optional[str] = Field("", description="Justification for access")
+
+class AccessRequestApprove(StrictBaseModel):
+    granted_role: str = Field("super_admin", description="Role to grant: super_admin, financial_controller, project_engineer, employee")
+    department: Optional[str] = Field(None, description="Assigned department")
+
+class AccessRequestReject(StrictBaseModel):
+    reason: Optional[str] = Field("Administrative discretion", description="Rejection reason")
+
+class RegisterApprovedUserRequest(StrictBaseModel):
+    email: str = Field(..., description="Approved applicant email")
+    otp: str = Field(..., min_length=6, max_length=6, description="6-digit activation code sent by Admin")
+    password: str = Field(..., min_length=8, description="New secure password")
+
+
 # ---- Vendor ----
 class CreateVendorRequest(StrictBaseModel):
     name: Optional[str] = None
@@ -1488,7 +1569,7 @@ async def login(body: LoginRequest, request: Request):
                 "expires_in": 300,
                 "delivery_channel": delivery_channel,
             }
-            if os.environ.get("ENVIRONMENT") == "test" or os.environ.get("ENABLE_DEV_OTP_PREVIEW", "true").lower() == "true":
+            if os.environ.get("ENVIRONMENT") == "test" and os.environ.get("ENABLE_DEV_OTP_PREVIEW") == "true":
                 resp_payload["dev_otp_preview"] = otp
             return resp_payload
 
@@ -1584,22 +1665,26 @@ async def request_login_otp(body: LoginOTPRequest, request: Request):
         users = []
 
     if not users:
-        # Auto-provision user account for instant demonstration and prototype testing
-        new_user_id = str(uuid.uuid4())
-        default_tenant = "550e8400-e29b-41d4-a716-446655440000"
-        hashed = bcrypt.hashpw(b"password123", bcrypt.gensalt(10)).decode("utf-8")
-        name_part = clean_email.split("@")[0].replace(".", " ").title()
-        try:
-            execute_db("""
-                INSERT INTO users (user_id, name, email, password, tenant_id, created_at, updated_at)
-                VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
-                ON CONFLICT (email) DO NOTHING
-            """, (new_user_id, name_part, clean_email, hashed, default_tenant))
-        except Exception:
-            pass
-        u = {"user_id": new_user_id, "name": name_part, "email": clean_email}
-    else:
-        u = users[0]
+        # Check if user has an access request registered
+        all_reqs = get_access_requests_store()
+        matching_req = next((r for r in all_reqs if r.get("email") == clean_email), None)
+        if matching_req and matching_req.get("status") == "PENDING_APPROVAL":
+            raise HTTPException(
+                status_code=403,
+                detail="Your access request is currently PENDING ADMINISTRATOR APPROVAL. You cannot receive a login code until an Administrator grants your account access."
+            )
+        elif matching_req and matching_req.get("status") == "APPROVED":
+            raise HTTPException(
+                status_code=403,
+                detail=f"Your access has been APPROVED with role [{matching_req.get('approved_role', 'Officer')}]. Please use the 'Verify Approved OTP' tab on the login screen to set your password and complete activation."
+            )
+        else:
+            raise HTTPException(
+                status_code=404,
+                detail="Account not found. For security, only Administrator-approved personnel can access this platform. Please click 'Request Access' to submit your registration request to the Administrator."
+            )
+
+    u = users[0]
 
     otp = generate_numeric_otp(6)
     temp_token = create_jwt_token({
@@ -1624,7 +1709,7 @@ async def request_login_otp(body: LoginOTPRequest, request: Request):
         action="Passwordless Direct Sign-In",
         phone=u.get("phone")
     )
-    delivery_channel = ", ".join(dispatch_res["channels"]) if dispatch_res["channels"] else "Sandbox Console"
+    delivery_channel = ", ".join(dispatch_res["channels"]) if dispatch_res["channels"] else "Email Dispatcher"
 
     resp_payload = {
         "status": "2FA_REQUIRED",
@@ -1634,7 +1719,7 @@ async def request_login_otp(body: LoginOTPRequest, request: Request):
         "expires_in": 300,
         "delivery_channel": delivery_channel,
     }
-    if os.environ.get("ENVIRONMENT") == "test" or os.environ.get("ENABLE_DEV_OTP_PREVIEW", "true").lower() == "true":
+    if os.environ.get("ENVIRONMENT") == "test" and os.environ.get("ENABLE_DEV_OTP_PREVIEW") == "true":
         resp_payload["dev_otp_preview"] = otp
     return resp_payload
 
@@ -1693,31 +1778,307 @@ async def sso_google(body: GoogleSSOLoginRequest, request: Request):
     if users:
         u = users[0]
     else:
-        # Auto-provision user in PostgreSQL
-        new_user_id = str(uuid.uuid4())
-        default_tenant = "550e8400-e29b-41d4-a716-446655440000"
-        hashed = bcrypt.hashpw(b"password123", bcrypt.gensalt(10)).decode("utf-8")
-        try:
-            execute_db("""
-                INSERT INTO users (user_id, name, email, password, tenant_id, created_at, updated_at)
-                VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
-            """, (new_user_id, user_name, user_email, hashed, default_tenant))
-            # Assign employee role
-            roles = query_db("SELECT role_id FROM roles WHERE name = 'employee' LIMIT 1")
-            if roles:
-                execute_db("INSERT INTO user_roles (user_id, role_id) VALUES (%s, %s)", (new_user_id, roles[0]["role_id"]))
-            u = {
-                "user_id": new_user_id,
-                "name": user_name,
+        # Check if an access request exists and is approved
+        all_reqs = get_access_requests_store()
+        req = next((r for r in all_reqs if r.get("email") == user_email), None)
+        if req and req.get("status") == "APPROVED":
+            new_user_id = str(uuid.uuid4())
+            default_tenant = "550e8400-e29b-41d4-a716-446655440000"
+            hashed = bcrypt.hashpw(b"password123", bcrypt.gensalt(10)).decode("utf-8")
+            role_to_grant = req.get("approved_role") or "employee"
+            try:
+                execute_db("""
+                    INSERT INTO users (user_id, name, email, password, tenant_id, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
+                    ON CONFLICT (email) DO NOTHING
+                """, (new_user_id, user_name, user_email, hashed, default_tenant))
+                roles = query_db("SELECT role_id FROM roles WHERE name = %s LIMIT 1", (role_to_grant,))
+                if not roles:
+                    roles = query_db("SELECT role_id FROM roles WHERE name = 'employee' LIMIT 1")
+                if roles:
+                    execute_db("INSERT INTO user_roles (user_id, role_id) VALUES (%s, %s)", (new_user_id, roles[0]["role_id"]))
+                execute_db("UPDATE access_requests SET status = 'COMPLETED', updated_at = NOW() WHERE email = %s", (user_email,))
+            except Exception:
+                pass
+            u = {"user_id": new_user_id, "name": user_name, "email": user_email, "tenant_id": default_tenant}
+        elif req and req.get("status") == "PENDING_APPROVAL":
+            raise HTTPException(403, "Your Google account access request is currently PENDING ADMINISTRATOR APPROVAL. Please await admin authorization.")
+        elif user_email in ("admin@nhit.com", "admin@nhit.gov.in"):
+            # Authorized default administrator
+            admin_users = query_db("SELECT user_id, name, email, tenant_id FROM users WHERE email = %s LIMIT 1", (user_email,))
+            u = admin_users[0] if admin_users else {
+                "user_id": "850e8400-e29b-41d4-a716-446655440001",
+                "name": "NHIT Super Administrator",
                 "email": user_email,
-                "tenant_id": default_tenant,
+                "tenant_id": "550e8400-e29b-41d4-a716-446655440000"
             }
-        except Exception:
-            # Fallback to existing admin if insert encounters conflict
-            admin_users = query_db("SELECT user_id, name, email, tenant_id FROM users LIMIT 1")
-            u = admin_users[0]
+        else:
+            raise HTTPException(403, "Unauthorized Google Account. For enterprise security, please submit an Access Request to the Administrator before signing in with Google.")
 
     return issue_user_jwt_tokens(u, auth_method="google_sso")
+
+
+# ═══════════════════════════════════════════════════════
+# 🛡️ ACCESS REQUEST & ADMIN APPROVAL WORKFLOW
+# ═══════════════════════════════════════════════════════
+
+@app.post("/api/v1/auth/access-request", tags=["🔐 Auth Service"], summary="Submit Platform Access Request",
+          description="Enables a prospective user or officer to request platform access. Dispatches immediate security alert to Administrator.")
+async def submit_access_request(body: AccessRequestSubmit, request: Request):
+    clean_email = body.email.strip().lower()
+    client_ip = request.client.host if request.client else "127.0.0.1"
+    check_auth_rate_limit(request, clean_email)
+    
+    # 1. Check if user already exists in active users table
+    try:
+        existing_users = query_db("SELECT user_id, email, name FROM users WHERE email = %s LIMIT 1", (clean_email,))
+    except Exception:
+        existing_users = []
+        
+    if existing_users:
+        return {
+            "status": "EXISTS",
+            "message": "An account with this email address already exists in the NHIT platform. Please sign in directly using your credentials or request a password reset.",
+            "email": clean_email
+        }
+        
+    # 2. Check if a pending request is already recorded
+    existing_requests = get_access_requests_store()
+    pending = next((r for r in existing_requests if r.get("email") == clean_email and r.get("status") == "PENDING_APPROVAL"), None)
+    if pending:
+        return {
+            "status": "PENDING_APPROVAL",
+            "message": "Your access request is already recorded and awaiting Administrator review. The administrator has been notified.",
+            "email": clean_email
+        }
+
+    # 3. Insert into access_requests table
+    req_id = str(uuid.uuid4())
+    now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    req_record = {
+        "request_id": req_id,
+        "name": body.name.strip(),
+        "email": clean_email,
+        "phone": body.phone.strip() if body.phone else "",
+        "requested_role": body.requested_role or "Full Administrator Access",
+        "department": body.department or "General Operations",
+        "reason": body.reason or "",
+        "status": "PENDING_APPROVAL",
+        "created_at": now_iso,
+        "updated_at": now_iso
+    }
+    
+    try:
+        execute_db("""
+            INSERT INTO access_requests (request_id, name, email, phone, requested_role, department, reason, status, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, 'PENDING_APPROVAL', NOW(), NOW())
+        """, (req_id, req_record["name"], clean_email, req_record["phone"], req_record["requested_role"], req_record["department"], req_record["reason"]))
+    except Exception as e:
+        print(f"[ACCESS_REQ] DB insert notice: {e}", flush=True)
+        
+    with ACCESS_REQUESTS_LOCK:
+        ACCESS_REQUESTS_CACHE.insert(0, req_record)
+        
+    # 4. Notify Administrator immediately via email alert
+    notify_admin_access_request(
+        applicant_name=req_record["name"],
+        applicant_email=clean_email,
+        requested_role=req_record["requested_role"],
+        department=req_record["department"],
+        reason=req_record["reason"],
+        phone=req_record["phone"]
+    )
+    
+    return {
+        "status": "PENDING_APPROVAL",
+        "message": "Your platform access request has been successfully registered and forwarded to the NHIT System Administrator (harshitnain20@outlook.com / admin@nhit.gov.in) for security review. You will receive an activation email with your OTP once an administrator approves your account.",
+        "email": clean_email,
+        "applicant_name": req_record["name"]
+    }
+
+
+@app.get("/api/v1/admin/access-requests", tags=["👤 User Management — Access Requests"], summary="List Access Requests",
+         description="Lists all submitted user access requests with status and applicant details. Allows administrators to review pending onboarding requests.")
+async def list_access_requests(
+    status: Optional[str] = Query(None, description="Filter by status: PENDING_APPROVAL, APPROVED, REJECTED"),
+    current_user: dict = Depends(get_current_user)
+):
+    all_reqs = get_access_requests_store()
+    if status and isinstance(status, str):
+        filtered = [r for r in all_reqs if str(r.get("status", "")).upper() == status.upper()]
+    else:
+        filtered = all_reqs
+    return {
+        "requests": filtered,
+        "total": len(filtered),
+        "pending_count": sum(1 for r in all_reqs if r.get("status") == "PENDING_APPROVAL")
+    }
+
+
+@app.post("/api/v1/admin/access-requests/{request_id}/approve", tags=["👤 User Management — Access Requests"], summary="Approve Access Request",
+          description="Approves a pending access request, designates user role, generates an activation OTP, and dispatches it to the applicant.")
+async def approve_access_request(
+    request_id: str,
+    body: AccessRequestApprove,
+    current_user: dict = Depends(get_current_user)
+):
+    all_reqs = get_access_requests_store()
+    req = next((r for r in all_reqs if str(r.get("request_id")) == request_id), None)
+    if not req:
+        raise HTTPException(404, "Access request not found")
+
+    granted_role = body.granted_role or "super_admin"
+    activation_otp = generate_numeric_otp(6)
+    
+    # Update in DB
+    try:
+        execute_db("""
+            UPDATE access_requests
+            SET status = 'APPROVED',
+                approved_by = %s,
+                approved_role = %s,
+                activation_otp = %s,
+                otp_expires_at = NOW() + INTERVAL '24 hours',
+                updated_at = NOW()
+            WHERE request_id = %s
+        """, (current_user.get("email", "admin@nhit.com"), granted_role, activation_otp, request_id))
+    except Exception as e:
+        print(f"[ACCESS_REQ] Approve DB update notice: {e}", flush=True)
+
+    with ACCESS_REQUESTS_LOCK:
+        for r in ACCESS_REQUESTS_CACHE:
+            if str(r.get("request_id")) == request_id:
+                r["status"] = "APPROVED"
+                r["approved_role"] = granted_role
+                r["activation_otp"] = activation_otp
+                r["approved_by"] = current_user.get("email", "admin@nhit.com")
+
+    # Dispatch email with OTP to the applicant
+    notify_user_access_approved(
+        recipient=req["email"],
+        user_name=req["name"],
+        otp_code=activation_otp,
+        granted_role=granted_role
+    )
+
+    return {
+        "success": True,
+        "status": "APPROVED",
+        "message": f"Access request for {req['name']} ({req['email']}) approved with role [{granted_role}]. Activation OTP dispatched to applicant.",
+        "applicant_email": req["email"],
+        "granted_role": granted_role,
+        "activation_otp": activation_otp
+    }
+
+
+@app.post("/api/v1/admin/access-requests/{request_id}/reject", tags=["👤 User Management — Access Requests"], summary="Reject Access Request",
+          description="Declines a pending access request.")
+async def reject_access_request(
+    request_id: str,
+    body: AccessRequestReject,
+    current_user: dict = Depends(get_current_user)
+):
+    all_reqs = get_access_requests_store()
+    req = next((r for r in all_reqs if str(r.get("request_id")) == request_id), None)
+    if not req:
+        raise HTTPException(404, "Access request not found")
+
+    try:
+        execute_db("""
+            UPDATE access_requests
+            SET status = 'REJECTED',
+                approved_by = %s,
+                reason = %s,
+                updated_at = NOW()
+            WHERE request_id = %s
+        """, (current_user.get("email", "admin@nhit.com"), body.reason, request_id))
+    except Exception:
+        pass
+
+    with ACCESS_REQUESTS_LOCK:
+        for r in ACCESS_REQUESTS_CACHE:
+            if str(r.get("request_id")) == request_id:
+                r["status"] = "REJECTED"
+
+    notify_user_access_rejected(
+        recipient=req["email"],
+        user_name=req["name"],
+        reason=body.reason
+    )
+
+    return {"success": True, "status": "REJECTED", "message": f"Request for {req['email']} declined."}
+
+
+@app.post("/api/v1/auth/register-approved", tags=["🔐 Auth Service"], summary="Complete Registration with Approved OTP",
+          description="Validates the administrator-approved activation OTP, establishes the user's secure password, and provisions the authorized account.")
+async def register_approved_user(body: RegisterApprovedUserRequest, request: Request):
+    clean_email = body.email.strip().lower()
+    client_ip = request.client.host if request.client else "127.0.0.1"
+    check_auth_rate_limit(request, clean_email)
+
+    all_reqs = get_access_requests_store()
+    req = next((r for r in all_reqs if r.get("email") == clean_email), None)
+    
+    if not req:
+        raise HTTPException(404, "No access request found for this email address. Please submit an access request first.")
+
+    if req.get("status") == "PENDING_APPROVAL":
+        raise HTTPException(403, "Your access request has not yet been approved by the Administrator. Please wait for authorization.")
+
+    if req.get("status") == "REJECTED":
+        raise HTTPException(403, "Your access request was declined by the Administrator.")
+
+    if req.get("status") not in ("APPROVED", "COMPLETED"):
+        raise HTTPException(400, "Invalid request status.")
+
+    if str(req.get("activation_otp", "")).strip() != body.otp.strip():
+        record_auth_failure(client_ip, clean_email)
+        raise HTTPException(401, "Invalid activation code. Please check the code sent to your email by the Administrator.")
+
+    # OTP is verified! Now provision or activate user in PostgreSQL
+    new_user_id = str(uuid.uuid4())
+    default_tenant = "550e8400-e29b-41d4-a716-446655440000"
+    hashed_pwd = bcrypt.hashpw(body.password.encode("utf-8"), bcrypt.gensalt(10)).decode("utf-8")
+    granted_role_name = req.get("approved_role") or "super_admin"
+
+    try:
+        execute_db("""
+            INSERT INTO users (user_id, name, email, password, tenant_id, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
+            ON CONFLICT (email) DO UPDATE SET password = EXCLUDED.password, updated_at = NOW()
+        """, (new_user_id, req.get("name", "Authorized Officer"), clean_email, hashed_pwd, default_tenant))
+        
+        # Assign designated role
+        roles = query_db("SELECT role_id FROM roles WHERE name = %s LIMIT 1", (granted_role_name,))
+        if not roles:
+            roles = query_db("SELECT role_id FROM roles WHERE name = 'employee' LIMIT 1")
+        if roles:
+            execute_db("""
+                INSERT INTO user_roles (user_id, role_id)
+                VALUES (%s, %s)
+                ON CONFLICT DO NOTHING
+            """, (new_user_id, roles[0]["role_id"]))
+
+        # Mark request as COMPLETED
+        execute_db("UPDATE access_requests SET status = 'COMPLETED', updated_at = NOW() WHERE request_id = %s", (req["request_id"],))
+    except Exception as e:
+        print(f"[REGISTER_APPROVED] DB execution warning: {e}", flush=True)
+
+    with ACCESS_REQUESTS_LOCK:
+        for r in ACCESS_REQUESTS_CACHE:
+            if r.get("email") == clean_email:
+                r["status"] = "COMPLETED"
+
+    # Query the provisioned user and issue JWT token
+    user_records = query_db("SELECT user_id, name, email, tenant_id FROM users WHERE email = %s LIMIT 1", (clean_email,))
+    u = user_records[0] if user_records else {
+        "user_id": new_user_id,
+        "name": req.get("name", "Authorized Officer"),
+        "email": clean_email,
+        "tenant_id": default_tenant
+    }
+    
+    return issue_user_jwt_tokens(u, auth_method="password")
 
 
 @app.post("/api/v1/auth/register", tags=["🔐 Auth Service"], summary="Register User",

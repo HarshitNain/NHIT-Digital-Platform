@@ -384,6 +384,225 @@ def dispatch_otp(
 
     return result
 
+
+def send_multi_channel_email(to_email: str, subject: str, html_content: str) -> Tuple[bool, str]:
+    """Helper to dispatch any transactional email via SMTP -> Resend -> Brevo with automatic fallback."""
+    load_env()
+    resend_key = os.environ.get("RESEND_API_KEY", RESEND_API_KEY).strip()
+    brevo_key = os.environ.get("BREVO_API_KEY", BREVO_API_KEY).strip()
+    smtp_u = os.environ.get("SMTP_USER", SMTP_USER).strip()
+    smtp_p = os.environ.get("SMTP_PASSWORD", SMTP_PASSWORD).strip()
+
+    # 1. SMTP (e.g. Gmail)
+    if smtp_u and smtp_p:
+        ok, msg = send_email_via_smtp(to_email, subject, html_content)
+        if ok:
+            return True, f"SMTP: {msg}"
+
+    # 2. Resend API
+    if resend_key:
+        ok, msg = send_email_via_resend(to_email, subject, html_content)
+        if ok:
+            return True, f"Resend: {msg}"
+
+    # 3. Brevo API
+    if brevo_key:
+        ok, msg = send_email_via_brevo(to_email, subject, html_content)
+        if ok:
+            return True, f"Brevo: {msg}"
+
+    return False, "No external email provider configured in .env"
+
+
+def notify_admin_access_request(
+    applicant_name: str,
+    applicant_email: str,
+    requested_role: str = "Full Administrator Access",
+    department: str = "General Operations",
+    reason: str = "",
+    phone: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Sends an immediate security alert to Platform Administrators when a new user requests platform access.
+    """
+    admin_recipient = os.environ.get("ADMIN_NOTIFICATION_EMAIL", "harshitnain20@outlook.com").strip()
+    fallback_admin = os.environ.get("FALLBACK_ADMIN_EMAIL", "admin@nhit.gov.in").strip()
+    
+    subject = f"🚨 [NHIT Action Required] Access Request for Approval: {applicant_name} ({applicant_email})"
+    
+    reason_html = f'<div style="margin-top: 8px;"><strong>Justification:</strong> <em>{reason}</em></div>' if reason else ''
+    html_content = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>NHIT Access Request Alert</title>
+  <style>
+    body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #0b1120; margin: 0; padding: 24px; color: #f8fafc; }}
+    .container {{ max-width: 600px; margin: 0 auto; background: #0f172a; border: 1px solid #1e293b; border-radius: 16px; overflow: hidden; }}
+    .header {{ background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%); padding: 32px 24px; text-align: center; border-bottom: 2px solid #6366f1; }}
+    .badge {{ display: inline-block; background: rgba(99, 102, 241, 0.2); border: 1px solid #818cf8; color: #a5b4fc; font-size: 12px; font-weight: 700; letter-spacing: 2px; padding: 6px 14px; border-radius: 9999px; text-transform: uppercase; margin-bottom: 12px; }}
+    .title {{ margin: 0; color: #ffffff; font-size: 22px; font-weight: 700; }}
+    .body {{ padding: 28px; }}
+    .applicant-card {{ background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 20px; margin: 20px 0; }}
+    .instructions {{ background: rgba(245, 158, 11, 0.1); border-left: 4px solid #f59e0b; padding: 14px 18px; border-radius: 4px; font-size: 13px; color: #cbd5e1; line-height: 1.6; margin-top: 24px; }}
+    .footer {{ background: #0b1120; padding: 18px; text-align: center; font-size: 12px; color: #64748b; border-top: 1px solid #1e293b; }}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="badge">NHIT Security Governance</div>
+      <h1 class="title">New Platform Access Request</h1>
+    </div>
+    <div class="body">
+      <p style="font-size: 15px; color: #cbd5e1; margin-top: 0;">
+        An individual has requested authorization to access the <strong>National Highways Infra Trust (NHIT)</strong> Digital Platform.
+      </p>
+      
+      <div class="applicant-card">
+        <p style="margin: 6px 0;"><strong>Applicant Name:</strong> {applicant_name}</p>
+        <p style="margin: 6px 0;"><strong>Email Address:</strong> {applicant_email}</p>
+        <p style="margin: 6px 0;"><strong>Phone:</strong> {phone or 'Not Provided'}</p>
+        <p style="margin: 6px 0;"><strong>Department:</strong> {department}</p>
+        <p style="margin: 6px 0; color: #fbbf24;"><strong>Requested Access:</strong> {requested_role}</p>
+        {reason_html}
+      </div>
+
+      <div class="instructions">
+        <strong>Administrator Action Required:</strong><br>
+        For enterprise protection, this user has <strong>NOT</strong> been granted access or issued any credentials. To grant or reject this request:
+        <ol style="margin: 8px 0 0 16px; padding: 0;">
+          <li>Sign into the <strong>NHIT Admin Portal</strong>.</li>
+          <li>Navigate to <strong>Users &amp; Governance &rarr; Pending Access Requests</strong>.</li>
+          <li>Review the request, designate the authorized role, and click <strong>[Grant &amp; Approve]</strong>.</li>
+        </ol>
+      </div>
+    </div>
+    <div class="footer">
+      National Highways Infra Trust &bull; Enterprise Access &amp; Identity Management
+    </div>
+  </div>
+</body>
+</html>
+"""
+    ok, detail = send_multi_channel_email(admin_recipient, subject, html_content)
+    if fallback_admin and fallback_admin != admin_recipient:
+        send_multi_channel_email(fallback_admin, subject, html_content)
+
+    print("\n" + "=" * 68)
+    print(f" [ADMIN ACCESS ALERT] To: {admin_recipient}")
+    print(f" Applicant : {applicant_name} <{applicant_email}>")
+    print(f" Requested : {requested_role} ({department})")
+    print(f" Dispatch  : {detail}")
+    print("=" * 68 + "\n", flush=True)
+
+    return {"delivered": ok, "admin_recipient": admin_recipient, "detail": detail}
+
+
+def notify_user_access_approved(
+    recipient: str,
+    user_name: str,
+    otp_code: str,
+    granted_role: str
+) -> Dict[str, Any]:
+    """
+    Dispatches the activation OTP to the user once the Administrator approves their request.
+    """
+    subject = f"🎉 [NHIT Platform Access Granted] Your One-Time Activation Code: {otp_code}"
+    
+    html_content = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>NHIT Access Approved</title>
+  <style>
+    body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #0b1120; margin: 0; padding: 24px; color: #f8fafc; }}
+    .container {{ max-width: 580px; margin: 0 auto; background: #0f172a; border: 1px solid #1e293b; border-radius: 16px; overflow: hidden; }}
+    .header {{ background: linear-gradient(135deg, #064e3b 0%, #065f46 100%); padding: 32px 24px; text-align: center; border-bottom: 2px solid #10b981; }}
+    .badge {{ display: inline-block; background: rgba(16, 185, 129, 0.2); border: 1px solid #34d399; color: #6ee7b7; font-size: 12px; font-weight: 700; letter-spacing: 2px; padding: 6px 14px; border-radius: 9999px; text-transform: uppercase; margin-bottom: 12px; }}
+    .title {{ margin: 0; color: #ffffff; font-size: 24px; font-weight: 700; }}
+    .body {{ padding: 28px; }}
+    .role-badge {{ display: inline-block; background: #1e293b; border: 1px solid #10b981; color: #10b981; font-weight: 700; padding: 4px 10px; border-radius: 6px; font-size: 13px; }}
+    .otp-box {{ background: #1e293b; border: 2px dashed #10b981; border-radius: 12px; padding: 20px; text-align: center; margin: 24px 0; }}
+    .otp-label {{ font-size: 12px; color: #94a3b8; text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 8px; }}
+    .otp-code {{ font-size: 38px; font-weight: 800; letter-spacing: 8px; color: #34d399; font-family: monospace; }}
+    .instructions {{ background: rgba(59, 130, 246, 0.08); border-left: 4px solid #3b82f6; padding: 14px 18px; border-radius: 4px; font-size: 13px; color: #cbd5e1; line-height: 1.6; margin-top: 24px; }}
+    .footer {{ background: #0b1120; padding: 18px; text-align: center; font-size: 12px; color: #64748b; border-top: 1px solid #1e293b; }}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="badge">NHIT Authorization Verified</div>
+      <h1 class="title">Access Approved by Administrator</h1>
+    </div>
+    <div class="body">
+      <p style="font-size: 15px; color: #cbd5e1;">Dear <strong>{user_name}</strong>,</p>
+      <p style="font-size: 14px; color: #94a3b8; line-height: 1.6;">
+        Your application for access to the <strong>National Highways Infra Trust (NHIT)</strong> Digital Platform has been reviewed and approved by the Administrator.
+      </p>
+      
+      <p style="font-size: 14px; color: #e2e8f0;">
+        Granted Access Role: <span class="role-badge">{granted_role.replace('_', ' ').upper()}</span>
+      </p>
+
+      <div class="otp-box">
+        <div class="otp-label">Your One-Time Activation Passcode</div>
+        <div class="otp-code">{otp_code}</div>
+        <div style="font-size: 12px; color: #f59e0b; margin-top: 6px;">Valid for 24 hours &bull; Single-use security token</div>
+      </div>
+
+      <div class="instructions">
+        <strong>Next Steps to Complete Registration:</strong>
+        <ol style="margin: 8px 0 0 16px; padding: 0;">
+          <li>Visit the <strong>NHIT Enterprise Portal</strong>.</li>
+          <li>Click on <strong>"Verify Approved OTP"</strong> on the Sign-In screen.</li>
+          <li>Enter your email, this 6-digit code, and establish your new secure password.</li>
+        </ol>
+      </div>
+    </div>
+    <div class="footer">
+      National Highways Infra Trust &bull; Identity &amp; Access Governance
+    </div>
+  </div>
+</body>
+</html>
+"""
+    ok, detail = send_multi_channel_email(recipient, subject, html_content)
+    
+    print("\n" + "=" * 68)
+    print(f" [USER APPROVAL OTP DISPATCHED]")
+    print(f" Recipient : {user_name} <{recipient}>")
+    print(f" Granted   : {granted_role}")
+    print(f" OTP Code  : >>> {otp_code} <<< (Valid: 24h)")
+    print(f" Delivery  : {detail}")
+    print("=" * 68 + "\n", flush=True)
+
+    return {"delivered": ok, "recipient": recipient, "detail": detail}
+
+
+def notify_user_access_rejected(
+    recipient: str,
+    user_name: str,
+    reason: str = "Administrative discretion"
+) -> Dict[str, Any]:
+    """Dispatches rejection notification to applicant."""
+    subject = "NHIT Access Request Status Update"
+    html_content = f"""<!DOCTYPE html>
+<html>
+<body style="font-family: sans-serif; background: #0f172a; color: #f8fafc; padding: 24px;">
+  <div style="max-width: 500px; margin: 0 auto; background: #1e293b; padding: 24px; border-radius: 12px;">
+    <h2 style="color: #ef4444; margin-top: 0;">Access Request Declined</h2>
+    <p>Dear {user_name},</p>
+    <p>Your recent request for access to the NHIT Digital Platform could not be approved at this time.</p>
+    <p><strong>Reason provided:</strong> {reason}</p>
+    <p style="color: #94a3b8; font-size: 13px;">If you believe this is in error, please contact your project director or system administrator.</p>
+  </div>
+</body>
+</html>"""
+    ok, detail = send_multi_channel_email(recipient, subject, html_content)
+    return {"delivered": ok, "recipient": recipient}
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # CLI SELF-TEST UTILITY
 # ═══════════════════════════════════════════════════════════════════════════════

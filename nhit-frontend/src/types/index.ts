@@ -136,7 +136,7 @@ export interface AuthUser {
 }
 
 export interface LoginResponse {
-  status?: 'SUCCESS' | '2FA_REQUIRED' | 'PASSWORD_CHANGE_REQUIRED';
+  status?: 'SUCCESS' | '2FA_REQUIRED' | 'PASSWORD_CHANGE_REQUIRED' | 'PENDING_APPROVAL' | 'EXISTS';
   session_temp_token?: string;
   message?: string;
   email?: string;
@@ -152,3 +152,19 @@ export interface LoginResponse {
   auth_method?: 'password' | 'password_otp' | 'google_sso';
   token_expires_at?: number;
 }
+
+export interface AccessRequest {
+  request_id: string;
+  name: string;
+  email: string;
+  phone?: string;
+  requested_role: string;
+  department: string;
+  reason?: string;
+  status: 'PENDING_APPROVAL' | 'APPROVED' | 'REJECTED' | 'COMPLETED';
+  approved_by?: string;
+  approved_role?: string;
+  activation_otp?: string;
+  created_at: string;
+}
+
