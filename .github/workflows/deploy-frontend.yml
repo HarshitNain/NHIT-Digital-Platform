@@ -14,6 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
 
     steps:
       - name: Checkout code
@@ -41,7 +43,8 @@ jobs:
         run: npm run build
 
       - name: Deploy to Vercel (CLI)
-        if: env.VERCEL_TOKEN != ''
+        if: env.VERCEL_TOKEN != '' && env.VERCEL_ORG_ID != '' && env.VERCEL_PROJECT_ID != ''
+        continue-on-error: true
         uses: amondnet/vercel-action@v25
         with:
           vercel-token: ${{ secrets.VERCEL_TOKEN }}
@@ -51,7 +54,7 @@ jobs:
           vercel-args: '--prod'
 
       - name: Git-Based Vercel Deployment Notice
-        if: env.VERCEL_TOKEN == ''
+        if: env.VERCEL_TOKEN == '' || env.VERCEL_ORG_ID == '' || env.VERCEL_PROJECT_ID == ''
         run: |
-          echo "ℹ️ VERCEL_TOKEN secret not configured in GitHub repository."
+          echo "ℹ️ Vercel secrets not configured in GitHub repository."
           echo "Vercel's native GitHub integration automatically builds and deploys from 'main' upon git push."
