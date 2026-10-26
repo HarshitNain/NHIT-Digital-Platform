@@ -4087,7 +4087,7 @@ class PaymentNoteStatusRequest(StrictBaseModel):
 async def update_payment_note_status(
     id: str, 
     body: PaymentNoteStatusRequest,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(require_role("super_admin", "admin", "financial_controller"))
 ):
     new_status = str(body.status).strip().upper()
     valid_statuses = {s.value for s in PaymentNoteStatus}
@@ -4119,7 +4119,7 @@ class PatchUTRRequest(StrictBaseModel):
 async def patch_utr(
     id: str, 
     body: PatchUTRRequest,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(require_role("super_admin", "admin", "financial_controller"))
 ):
     utr = body.utr_number or body.utr_no or "UTR-RECORDED"
     match = next((n for n in PAYMENT_NOTES_STORE if str(n.get("id")) == str(id)), None)
