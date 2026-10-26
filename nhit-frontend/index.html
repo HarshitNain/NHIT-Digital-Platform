@@ -8,6 +8,38 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+      // Defensive shield for third-party browser extensions (e.g. Blackbox AI telemetry)
+      (function() {
+        if (typeof window !== 'undefined') {
+          if (window.fetch) {
+            var _origFetch = window.fetch;
+            window.fetch = function(input, init) {
+              try {
+                var url = typeof input === 'string' ? input : (input && input.url ? input.url : '');
+                if (url.indexOf('useblackbox.io') !== -1) {
+                  return Promise.resolve(new Response(JSON.stringify({ status: 'ok', handled: true }), {
+                    status: 200,
+                    statusText: 'OK',
+                    headers: { 'Content-Type': 'application/json' }
+                  }));
+                }
+              } catch (_) {}
+              return _origFetch.apply(this, arguments);
+            };
+          }
+          window.addEventListener('unhandledrejection', function(event) {
+            try {
+              var r = event.reason;
+              var msg = (r && (r.message || r.stack || String(r))) || '';
+              if (msg.indexOf('useblackbox.io') !== -1 || msg.indexOf('index.iife.js') !== -1) {
+                event.preventDefault();
+              }
+            } catch (_) {}
+          });
+        }
+      })();
+    </script>
     <script src="https://accounts.google.com/gsi/client" async defer></script>
   </head>
   <body>
