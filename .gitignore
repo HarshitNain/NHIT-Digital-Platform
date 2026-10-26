@@ -60,3 +60,6 @@ payment-server
 harness/reports/*.html
 harness/reports/*.md
 !harness/reports/.gitkeep
+
+# Temporary scratch test files
+scratch/

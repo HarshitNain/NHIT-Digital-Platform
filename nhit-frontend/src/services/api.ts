@@ -40,7 +40,7 @@ export function setAuthToken(token: string | null) {
   try {
     if (token) {
       sessionStorage.setItem('nhit_session_token', token);
-      localStorage.removeItem('nhit_auth_token'); // Clean up persistent localStorage
+      localStorage.setItem('nhit_auth_token', token);
     } else {
       sessionStorage.removeItem('nhit_session_token');
       localStorage.removeItem('nhit_auth_token');

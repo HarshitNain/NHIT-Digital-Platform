@@ -594,6 +594,7 @@ def check_database_migrations(reporter: HarnessReporter):
 # ------------------------------------------------------------------------------
 def check_dynamic_api(reporter: HarnessReporter):
     reporter.start_phase("4. DYNAMIC IN-PROCESS FASTAPI SECURITY & ROUTE AUDIT")
+    os.environ["ALLOW_TEST_AUTH_MOCK"] = "true"
 
     sys.path.insert(0, str(REPO_ROOT / "NHIT Backend"))
     try:

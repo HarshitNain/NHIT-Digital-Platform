@@ -61,6 +61,7 @@ export function App() {
     roles: string[];
     permissions: string[];
   } | null>(() => {
+    if (!getAuthToken()) return null;
     const saved = localStorage.getItem('nhit_auth_user');
     return saved ? JSON.parse(saved) : null;
   });
@@ -414,6 +415,12 @@ export function App() {
 
   const handleEnterAdminPortal = () => {
     if (isAuthenticated && currentAuthUser) {
+      const roles = currentAuthUser.roles || [];
+      const isAdminOrExec = roles.some(r => ['super_admin', 'admin', 'cgm', 'dgm', 'financial_controller'].includes(r.toLowerCase()));
+      if (!isAdminOrExec) {
+        addToast('Access Restricted: Administrative Portal requires an executive or admin role.', 'error');
+        return;
+      }
       setPortalMode('admin');
       setActiveTab('dashboard');
       setLandingViewMode('landing');
@@ -433,6 +440,14 @@ export function App() {
   };
 
   const handleTogglePortal = () => {
+    if (portalMode === 'user') {
+      const roles = currentAuthUser?.roles || [];
+      const isAdminOrExec = roles.some(r => ['super_admin', 'admin', 'cgm', 'dgm', 'financial_controller'].includes(r.toLowerCase()));
+      if (!isAdminOrExec) {
+        addToast('Access Restricted: Administrative Portal requires an executive or admin role.', 'error');
+        return;
+      }
+    }
     const nextMode = portalMode === 'admin' ? 'user' : 'admin';
     setPortalMode(nextMode);
     setActiveTab(nextMode === 'admin' ? 'dashboard' : 'userportal');
