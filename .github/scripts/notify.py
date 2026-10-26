@@ -19,16 +19,38 @@ from email.mime.text import MIMEText
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8")
 
+import subprocess
+
 # Environment context provided by GitHub Actions runner
 WORKFLOW_NAME = os.environ.get("WORKFLOW_NAME", "NHIT CI/CD & Deployment")
 REPO_NAME = os.environ.get("REPO_NAME", "HarshitNain/NHIT-Digital-Platform")
-BRANCH_NAME = os.environ.get("BRANCH_NAME", "main")
-COMMIT_SHA = os.environ.get("COMMIT_SHA", "")[:7]
-COMMIT_MSG = os.environ.get("COMMIT_MSG", "Latest updates").splitlines()[0]
-COMMIT_AUTHOR = os.environ.get("COMMIT_AUTHOR", "Developer")
-RUN_URL = os.environ.get("RUN_URL", f"https://github.com/{REPO_NAME}/actions")
+BRANCH_NAME = os.environ.get("BRANCH_NAME") or os.environ.get("GITHUB_REF_NAME") or "main"
+RUN_ID = os.environ.get("GITHUB_RUN_ID", "")
+RUN_URL = f"https://github.com/{REPO_NAME}/actions/runs/{RUN_ID}" if RUN_ID else f"https://github.com/{REPO_NAME}/actions"
 APP_URL = "https://nhit-digital-platform.vercel.app"
 API_URL = "https://nhit-api-gateway.onrender.com"
+
+# Safely extract Git commit details without YAML injection risks
+COMMIT_SHA = (os.environ.get("COMMIT_SHA") or os.environ.get("GITHUB_SHA") or "")[:7]
+COMMIT_MSG = os.environ.get("COMMIT_MSG", "")
+COMMIT_AUTHOR = os.environ.get("COMMIT_AUTHOR", "")
+
+try:
+    if not COMMIT_SHA:
+        COMMIT_SHA = subprocess.check_output(["git", "log", "-1", "--pretty=%h"], text=True, stderr=subprocess.DEVNULL).strip()[:7]
+    if not COMMIT_MSG:
+        COMMIT_MSG = subprocess.check_output(["git", "log", "-1", "--pretty=%s"], text=True, stderr=subprocess.DEVNULL).strip()
+    if not COMMIT_AUTHOR:
+        COMMIT_AUTHOR = subprocess.check_output(["git", "log", "-1", "--pretty=%an"], text=True, stderr=subprocess.DEVNULL).strip()
+except Exception:
+    pass
+
+if not COMMIT_SHA:
+    COMMIT_SHA = "latest"
+if not COMMIT_MSG:
+    COMMIT_MSG = "Platform updates and verification"
+if not COMMIT_AUTHOR:
+    COMMIT_AUTHOR = "Engineering Team"
 
 # Destination & credential secrets
 NOTIFICATION_EMAIL = os.environ.get("NOTIFICATION_EMAIL", "harshitnain20@outlook.com").strip()
