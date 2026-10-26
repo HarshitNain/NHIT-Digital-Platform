@@ -929,6 +929,8 @@ DEFAULT_CORS_ORIGINS = [
     "http://127.0.0.1:8080",
     "http://localhost",
     "http://127.0.0.1",
+    "https://nhit-digital-platform.vercel.app",
+    "https://nhit-frontend.vercel.app",
 ]
 env_cors = os.environ.get("CORS_ORIGINS", "")
 cors_origins = [o.strip() for o in env_cors.split(",") if o.strip()] if env_cors else DEFAULT_CORS_ORIGINS
@@ -936,6 +938,7 @@ cors_origins = [o.strip() for o in env_cors.split(",") if o.strip()] if env_cors
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
+    allow_origin_regex=r"^https:\/\/.*\.vercel\.app$",
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],

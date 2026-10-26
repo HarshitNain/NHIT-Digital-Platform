@@ -64,7 +64,7 @@ services:
 
       # CORS — set to your Vercel frontend URL after it is deployed
       - key: CORS_ORIGINS
-        value: https://nhit-frontend.vercel.app  # ← Update this after Vercel deploy
+        value: https://nhit-digital-platform.vercel.app,https://nhit-frontend.vercel.app
 
       # Security — required secrets (fill in Render dashboard)
       - key: JWT_SECRET
