@@ -47,3 +47,28 @@ jobs:
             sleep 30
           done
           echo "⚠️ Backend health check timed out (deploy may still be in progress)"
+
+      - name: Checkout Code
+        if: success()
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        if: success()
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Dispatch Multi-Channel Success Alerts (Email / Slack / Discord)
+        if: success()
+        continue-on-error: true
+        env:
+          WORKFLOW_NAME: "Render Backend API Deployment"
+          NOTIFICATION_EMAIL: ${{ secrets.NOTIFICATION_EMAIL }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: python .github/scripts/notify.py
