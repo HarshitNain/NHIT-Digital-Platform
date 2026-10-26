@@ -700,12 +700,10 @@ def check_public_rate_limit(request: Request):
 # 2. SECURE ERROR SANITIZATION UTILITY (Vibecode Checklist Item 5)
 # ═══════════════════════════════════════════════════════
 def handle_internal_error(e: Exception, action_context: str = "request processing") -> HTTPException:
-    """Logs detailed internal exception server-side and returns a generic sanitized error message to end users."""
+    """Logs detailed internal exception server-side and returns error message with reference ID."""
     error_id = str(uuid.uuid4())[:8]
     print(f"[SECURITY_LOG] [INTERNAL_ERROR {error_id}] Error during {action_context}: {type(e).__name__} - {str(e)}", flush=True)
-    if os.environ.get("ENVIRONMENT") in ("test", "development"):
-        return HTTPException(500, f"Internal error during {action_context}: {str(e)}")
-    return HTTPException(500, f"An internal error occurred while processing {action_context}. Reference ID: {error_id}")
+    return HTTPException(500, f"Internal error during {action_context}: {type(e).__name__}: {str(e)} (Ref: {error_id})")
 
 # ═══════════════════════════════════════════════════════
 # 3. FILE UPLOAD SECURITY MODULE (Vibecode Checklist Item 6)
@@ -1156,40 +1154,26 @@ async def database_exception_handler(request: Request, exc: psycopg2.Error):
     """Prevents raw SQL, table names, or database queries from leaking to end users (Vibecode Checklist Item 5)."""
     error_id = str(uuid.uuid4())[:8]
     print(f"[SECURITY_LOG] [DB_ERROR {error_id}] {request.method} {request.url.path}: {exc}", flush=True)
-    if os.environ.get("ENVIRONMENT") in ("test", "development"):
-        return JSONResponse(
-            status_code=500,
-            content={"detail": f"Database error ({error_id}): {str(exc)}"}
-        )
     return JSONResponse(
         status_code=500,
         content={
             "status": "DATABASE_ERROR",
-            "detail": f"A secure database processing error occurred. Reference ID: {error_id}",
+            "detail": f"Database error ({error_id}): {type(exc).__name__}: {str(exc)}",
             "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat()
         }
     )
 
 @app.exception_handler(StarletteHTTPException)
 async def custom_http_exception_handler(request, exc: StarletteHTTPException):
-    if exc.status_code == 500 and os.environ.get("ENVIRONMENT") not in ("test", "development"):
-        error_id = str(uuid.uuid4())[:8]
-        print(f"[INTERNAL ERROR {error_id}] {request.method} {request.url.path}: {exc.detail}", flush=True)
-        return JSONResponse(
-            status_code=500,
-            content={"detail": f"An internal database/server error occurred. (Error ID: {error_id})"}
-        )
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
 @app.exception_handler(Exception)
 async def generic_exception_handler(request, exc: Exception):
     error_id = str(uuid.uuid4())[:8]
     print(f"[UNHANDLED EXCEPTION {error_id}] {request.method} {request.url.path}: {exc}", flush=True)
-    if os.environ.get("ENVIRONMENT") in ("test", "development"):
-        return JSONResponse(status_code=500, content={"detail": f"[{error_id}] {str(exc)}"})
     return JSONResponse(
         status_code=500,
-        content={"detail": f"An unexpected error occurred. (Error ID: {error_id})"}
+        content={"detail": f"An unexpected error occurred ({error_id}): {type(exc).__name__}: {str(exc)}"}
     )
 
 
