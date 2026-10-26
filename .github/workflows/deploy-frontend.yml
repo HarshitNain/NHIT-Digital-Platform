@@ -59,8 +59,15 @@ jobs:
           echo "ℹ️ Vercel secrets not configured in GitHub repository."
           echo "Vercel's native GitHub integration automatically builds and deploys from 'main' upon git push."
 
+      - name: Setup Python
+        if: success()
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Dispatch Multi-Channel Success Alerts (Email / Slack / Discord)
         if: success()
+        continue-on-error: true
         env:
           WORKFLOW_NAME: "Frontend Production Build & Vercel Deploy"
           NOTIFICATION_EMAIL: ${{ secrets.NOTIFICATION_EMAIL }}

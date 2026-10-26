@@ -22,8 +22,8 @@ if sys.platform == "win32":
 import subprocess
 
 # Environment context provided by GitHub Actions runner
-WORKFLOW_NAME = os.environ.get("WORKFLOW_NAME", "NHIT CI/CD & Deployment")
-REPO_NAME = os.environ.get("REPO_NAME", "HarshitNain/NHIT-Digital-Platform")
+WORKFLOW_NAME = os.environ.get("WORKFLOW_NAME") or "NHIT CI/CD & Deployment"
+REPO_NAME = os.environ.get("REPO_NAME") or "HarshitNain/NHIT-Digital-Platform"
 BRANCH_NAME = os.environ.get("BRANCH_NAME") or os.environ.get("GITHUB_REF_NAME") or "main"
 RUN_ID = os.environ.get("GITHUB_RUN_ID", "")
 RUN_URL = f"https://github.com/{REPO_NAME}/actions/runs/{RUN_ID}" if RUN_ID else f"https://github.com/{REPO_NAME}/actions"
@@ -52,17 +52,20 @@ if not COMMIT_MSG:
 if not COMMIT_AUTHOR:
     COMMIT_AUTHOR = "Engineering Team"
 
-# Destination & credential secrets
-NOTIFICATION_EMAIL = os.environ.get("NOTIFICATION_EMAIL", "harshitnain20@outlook.com").strip()
-RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "").strip()
-SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.gmail.com").strip()
-SMTP_PORT = int(os.environ.get("SMTP_PORT", "465"))
-SMTP_USER = os.environ.get("SMTP_USER", "").strip()
-SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "").strip()
-SMTP_FROM_NAME = os.environ.get("SMTP_FROM_NAME", "NHIT Platform Deployments").strip()
+# Destination & credential secrets (safely handle empty string values from GitHub secrets)
+NOTIFICATION_EMAIL = (os.environ.get("NOTIFICATION_EMAIL") or "harshitnain20@outlook.com").strip()
+RESEND_API_KEY = (os.environ.get("RESEND_API_KEY") or "").strip()
+SMTP_HOST = (os.environ.get("SMTP_HOST") or "smtp.gmail.com").strip()
+try:
+    SMTP_PORT = int((os.environ.get("SMTP_PORT") or "465").strip())
+except (ValueError, TypeError):
+    SMTP_PORT = 465
+SMTP_USER = (os.environ.get("SMTP_USER") or "").strip()
+SMTP_PASSWORD = (os.environ.get("SMTP_PASSWORD") or "").strip()
+SMTP_FROM_NAME = (os.environ.get("SMTP_FROM_NAME") or "NHIT Platform Deployments").strip()
 
-DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
-SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL", "").strip()
+DISCORD_WEBHOOK_URL = (os.environ.get("DISCORD_WEBHOOK_URL") or "").strip()
+SLACK_WEBHOOK_URL = (os.environ.get("SLACK_WEBHOOK_URL") or "").strip()
 
 def send_discord():
     if not DISCORD_WEBHOOK_URL:
@@ -272,4 +275,8 @@ def main():
     print("==================================================")
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as exc:
+        print(f"⚠️ Notification dispatcher encountered non-fatal exception: {exc}")
+        sys.exit(0)

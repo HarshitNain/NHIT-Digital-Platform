@@ -235,8 +235,8 @@ jobs:
   # ----------------------------------------------------------------------------
   notify-success:
     name: Multi-Channel Success Alerts
-    needs: [frontend-build, go-microservices, backend-test]
-    if: success() && github.ref == 'refs/heads/main'
+    needs: [frontend-build, go-microservices, backend-integration-tests]
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -248,6 +248,7 @@ jobs:
           python-version: '3.12'
 
       - name: Dispatch Multi-Channel Success Alerts (Email / Slack / Discord)
+        continue-on-error: true
         env:
           WORKFLOW_NAME: "NHIT Enterprise CI/CD Pipeline"
           NOTIFICATION_EMAIL: ${{ secrets.NOTIFICATION_EMAIL }}
