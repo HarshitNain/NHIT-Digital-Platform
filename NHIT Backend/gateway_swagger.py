@@ -1776,6 +1776,17 @@ async def list_services():
 # 🔐 AUTH SERVICE (Real DB, Cryptographic JWT, RBAC, 2FA OTP, Google SSO)
 # ═══════════════════════════════════════════════════════
 
+BOOTSTRAP_ACCOUNTS = {
+    "admin@nhit.com": ("850e8400-e29b-41d4-a716-446655440001", "NHIT Super Administrator"),
+    "admin@nhit.gov.in": ("850e8400-e29b-41d4-a716-446655440001", "NHIT Super Administrator"),
+    "officer@nhit.com": ("850e8400-e29b-41d4-a716-446655440002", "NHIT Project Officer"),
+    "cfo@nhit.com": ("850e8400-e29b-41d4-a716-446655440003", "NHIT Chief Financial Officer"),
+    "cto@nhit.com": ("850e8400-e29b-41d4-a716-446655440004", "NHIT Chief Technology Officer"),
+    "procurement@nhit.com": ("850e8400-e29b-41d4-a716-446655440005", "NHIT Procurement Lead"),
+    "engineer@nhit.com": ("850e8400-e29b-41d4-a716-446655440006", "NHIT Project Engineer"),
+}
+
+
 @app.post("/api/v1/auth/login", tags=["🔐 Auth Service"], summary="User Login (Password & 2FA Challenge)",
           description="""
 Authenticates a user against PostgreSQL `users` using bcrypt password verification.
@@ -1814,16 +1825,6 @@ async def login(body: LoginRequest, request: Request):
                     }]
                 else:
                     users = []
-
-        BOOTSTRAP_ACCOUNTS = {
-            "admin@nhit.com": ("850e8400-e29b-41d4-a716-446655440001", "NHIT Super Administrator"),
-            "admin@nhit.gov.in": ("850e8400-e29b-41d4-a716-446655440001", "NHIT Super Administrator"),
-            "officer@nhit.com": ("850e8400-e29b-41d4-a716-446655440002", "NHIT Project Officer"),
-            "cfo@nhit.com": ("850e8400-e29b-41d4-a716-446655440003", "NHIT Chief Financial Officer"),
-            "cto@nhit.com": ("850e8400-e29b-41d4-a716-446655440004", "NHIT Chief Technology Officer"),
-            "procurement@nhit.com": ("850e8400-e29b-41d4-a716-446655440005", "NHIT Procurement Lead"),
-            "engineer@nhit.com": ("850e8400-e29b-41d4-a716-446655440006", "NHIT Project Engineer"),
-        }
 
         clean_login = body.login.strip().lower()
         if not users and clean_login in BOOTSTRAP_ACCOUNTS:
