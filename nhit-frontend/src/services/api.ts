@@ -614,11 +614,10 @@ export const api = {
       return {
         success: true,
         account: {
-          account_id: 'ACC-LOCAL',
+          id: 'ACC-LOCAL',
           vendor_id: vendorId,
           ...account,
           is_primary: account.is_primary || false,
-          created_at: new Date().toISOString(),
         } as VendorAccount,
       };
     }
@@ -634,11 +633,10 @@ export const api = {
       return {
         success: true,
         account: {
-          account_id: 'ACC-LOCAL',
+          id: 'ACC-LOCAL',
           vendor_id: vendorId,
           ...account,
           is_primary: account.is_primary || false,
-          created_at: new Date().toISOString(),
         } as VendorAccount,
       };
     }
