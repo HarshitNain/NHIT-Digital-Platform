@@ -14,13 +14,29 @@ import {
   AccessRequest,
 } from '../types';
 
-// In production (Vercel), __API_BASE__ is injected by vite.config.ts from
-// the VITE_API_GATEWAY_URL env var (e.g., https://nhit-api.onrender.com).
-// In local dev (no env var), Vite's proxy routes /api/* -> http://localhost:8080.
+// Target API Gateway URL for production deployments (Render)
+export const PRODUCTION_API_GATEWAY = 'https://nhit-api-gateway.onrender.com';
+
 declare const __API_BASE__: string;
-const BASE_URL = (typeof __API_BASE__ !== 'undefined' && __API_BASE__)
-  ? `${__API_BASE__}/api/v1`
-  : '/api/v1';
+
+export function resolveApiBaseUrl(): string {
+  // 1. Injected at build time by Vite from VITE_API_GATEWAY_URL
+  if (typeof __API_BASE__ !== 'undefined' && __API_BASE__ && typeof __API_BASE__ === 'string' && __API_BASE__.trim() !== '') {
+    return `${__API_BASE__.replace(/\/+$/, '')}/api/v1`;
+  }
+  // 2. Browser runtime detection: if running on Vercel or any live host (not localhost), use Render gateway
+  if (typeof window !== 'undefined' && window.location) {
+    const host = window.location.hostname;
+    const isLocalhost = host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host.endsWith('.local');
+    if (!isLocalhost) {
+      return `${PRODUCTION_API_GATEWAY}/api/v1`;
+    }
+  }
+  // 3. Local development fallback (Vite proxy /api/* -> http://localhost:8080 or port 8000)
+  return '/api/v1';
+}
+
+const BASE_URL = resolveApiBaseUrl();
 
 
 let cachedToken: string | null = null;

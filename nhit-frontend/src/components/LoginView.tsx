@@ -333,7 +333,11 @@ export const LoginView: React.FC<LoginViewProps> = ({
     }
 
     // Default: seamless enterprise Google SSO flow without invalid_client error
-    setGoogleSsoEmail(email && email.includes('@') ? email.trim() : 'rajeshbala381@gmail.com');
+    if (email && email.includes('@')) {
+      handleExecuteGoogleSSO(email.trim());
+      return;
+    }
+    setGoogleSsoEmail('rajeshbala381@gmail.com');
     setGoogleSsoModalOpen(true);
   };
 
