@@ -1,6 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "buildCommand": "cd nhit-frontend && npm install && npm run build",
+  "installCommand": "cd nhit-frontend && npm install --prefer-offline --no-audit",
+  "buildCommand": "cd nhit-frontend && npm run build",
   "outputDirectory": "nhit-frontend/dist",
   "framework": "vite",
   "rewrites": [
