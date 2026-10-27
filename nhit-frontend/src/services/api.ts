@@ -125,6 +125,45 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
+  microsoftSSO: (data: { credential?: string; code?: string; email?: string; name?: string; tenant_id?: string }) =>
+    fetchJSON<LoginResponse>('/auth/sso/microsoft', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  enterpriseSSO: (data: { email: string; domain?: string; saml_assertion?: string; name?: string }) =>
+    fetchJSON<LoginResponse>('/auth/sso/enterprise', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  initiateSSO: (data: { provider: 'GOOGLE' | 'MICROSOFT'; redirect_uri?: string; state?: string; tenant_id?: string }) =>
+    fetchJSON<{ auth_url: string; state?: string; provider: string }>('/auth/sso/initiate', {
+      method: 'POST',
+      body: JSON.stringify({
+        tenant_id: data.tenant_id || '550e8400-e29b-41d4-a716-446655440000',
+        provider: data.provider,
+        redirect_uri: data.redirect_uri || (typeof window !== 'undefined' ? `${window.location.origin}/auth/callback` : ''),
+        state: data.state || 'nhit_sso',
+      }),
+    }),
+
+  completeSSO: (data: { provider: string; code: string; redirect_uri?: string; state?: string; tenant_id?: string }) =>
+    fetchJSON<LoginResponse>('/auth/sso/complete', {
+      method: 'POST',
+      body: JSON.stringify({
+        tenant_id: data.tenant_id || '550e8400-e29b-41d4-a716-446655440000',
+        provider: data.provider,
+        code: data.code,
+        redirect_uri: data.redirect_uri || (typeof window !== 'undefined' ? `${window.location.origin}/auth/callback` : ''),
+        state: data.state || '',
+      }),
+    }),
+
+  getSSOProviders: () =>
+    fetchJSON<{ providers: Array<{ id: string; name: string; configured: boolean; type: string }> }>('/auth/sso/providers'),
+
+
   changePassword: (data: { new_password: string; confirm_password?: string; session_temp_token?: string }) =>
     fetchJSON<LoginResponse>('/auth/change-password', {
       method: 'POST',

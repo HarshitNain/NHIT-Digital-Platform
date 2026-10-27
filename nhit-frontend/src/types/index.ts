@@ -131,7 +131,7 @@ export interface AuthUser {
   roles: string[];
   permissions: string[];
   tenant_id?: string;
-  auth_method?: 'password' | 'password_otp' | 'google_sso';
+  auth_method?: 'password' | 'password_otp' | 'google_sso' | 'microsoft_sso' | 'enterprise_sso';
   portalMode: 'admin' | 'user';
 }
 
@@ -149,9 +149,17 @@ export interface LoginResponse {
   tenant_id?: string;
   roles?: string[];
   permissions?: string[];
-  auth_method?: 'password' | 'password_otp' | 'google_sso';
+  auth_method?: 'password' | 'password_otp' | 'google_sso' | 'microsoft_sso' | 'enterprise_sso';
   token_expires_at?: number;
 }
+
+export interface SSOProviderInfo {
+  id: string;
+  name: string;
+  configured: boolean;
+  type: string;
+}
+
 
 export interface AccessRequest {
   request_id: string;

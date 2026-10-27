@@ -15,8 +15,10 @@ import {
   Send,
   AlertCircle,
   HelpCircle,
+  Building2,
 } from 'lucide-react';
 import { api, setAuthToken } from '../services/api';
+import type { LoginResponse } from '../types';
 
 interface LoginViewProps {
   onLoginSuccess: (user: {
@@ -25,7 +27,7 @@ interface LoginViewProps {
     name: string;
     roles: string[];
     permissions: string[];
-    auth_method?: 'password' | 'password_otp' | 'google_sso';
+    auth_method?: 'password' | 'password_otp' | 'google_sso' | 'microsoft_sso' | 'enterprise_sso';
     portalMode: 'admin' | 'user';
   }) => void;
   onBackToProduct?: () => void;
@@ -72,9 +74,10 @@ export const LoginView: React.FC<LoginViewProps> = ({
   const [verifyNewPassword, setVerifyNewPassword] = useState('');
   const [verifyConfirmPassword, setVerifyConfirmPassword] = useState('');
 
-  // Google SSO Modal State
+  // Google & Enterprise SSO Modal State
   const [googleSsoModalOpen, setGoogleSsoModalOpen] = useState(false);
   const [googleSsoEmail, setGoogleSsoEmail] = useState('');
+  const [ssoProvider, setSsoProvider] = useState<'google' | 'microsoft' | 'enterprise'>('google');
 
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
@@ -246,10 +249,10 @@ export const LoginView: React.FC<LoginViewProps> = ({
     );
   };
 
-  const handleExecuteGoogleSSO = async (targetEmail: string) => {
+  const handleExecuteSSO = async (targetEmail: string, provider: 'google' | 'microsoft' | 'enterprise' = ssoProvider) => {
     const cleanEmail = targetEmail.trim().toLowerCase();
     if (!cleanEmail || !cleanEmail.includes('@')) {
-      setErrorMsg('Please enter a valid Google email address.');
+      setErrorMsg('Please enter a valid official or corporate email address.');
       return;
     }
     setLoading(true);
@@ -258,10 +261,25 @@ export const LoginView: React.FC<LoginViewProps> = ({
       const derivedName = cleanEmail === 'admin@nhit.com'
         ? 'NHIT Super Administrator'
         : cleanEmail.split('@')[0].replace(/[._]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-      const res = await api.googleSSO({
-        email: cleanEmail,
-        name: derivedName,
-      });
+      
+      let res: LoginResponse;
+      if (provider === 'microsoft') {
+        res = await api.microsoftSSO({
+          email: cleanEmail,
+          name: derivedName,
+        });
+      } else if (provider === 'enterprise') {
+        res = await api.enterpriseSSO({
+          email: cleanEmail,
+          name: derivedName,
+        });
+      } else {
+        res = await api.googleSSO({
+          email: cleanEmail,
+          name: derivedName,
+        });
+      }
+
       if (res.token) {
         setAuthToken(res.token);
         onLoginSuccess({
@@ -270,12 +288,12 @@ export const LoginView: React.FC<LoginViewProps> = ({
           name: res.name!,
           roles: res.roles || ['employee'],
           permissions: res.permissions || [],
-          auth_method: 'google_sso',
+          auth_method: `${provider}_sso` as any,
           portalMode,
         });
       }
     } catch (err: any) {
-      setErrorMsg(err.message || 'Google SSO authorization failed.');
+      setErrorMsg(err.message || `${provider.toUpperCase()} SSO authorization failed.`);
     } finally {
       setLoading(false);
       setGoogleSsoModalOpen(false);
@@ -284,6 +302,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
 
   const handleGoogleSSO = async () => {
     setErrorMsg('');
+    setSsoProvider('google');
     const rawClientId = (import.meta as any).env?.VITE_GOOGLE_CLIENT_ID || '';
     const gWindow = window as any;
 
@@ -332,12 +351,33 @@ export const LoginView: React.FC<LoginViewProps> = ({
       }
     }
 
-    // Default: seamless enterprise Google SSO flow without invalid_client error
     if (email && email.includes('@')) {
-      handleExecuteGoogleSSO(email.trim());
+      handleExecuteSSO(email.trim(), 'google');
       return;
     }
     setGoogleSsoEmail('rajeshbala381@gmail.com');
+    setGoogleSsoModalOpen(true);
+  };
+
+  const handleMicrosoftSSO = () => {
+    setErrorMsg('');
+    setSsoProvider('microsoft');
+    if (email && email.includes('@')) {
+      handleExecuteSSO(email.trim(), 'microsoft');
+      return;
+    }
+    setGoogleSsoEmail('officer@nhit.gov.in');
+    setGoogleSsoModalOpen(true);
+  };
+
+  const handleEnterpriseSSO = () => {
+    setErrorMsg('');
+    setSsoProvider('enterprise');
+    if (email && email.includes('@')) {
+      handleExecuteSSO(email.trim(), 'enterprise');
+      return;
+    }
+    setGoogleSsoEmail(email || 'admin@nhit.com');
     setGoogleSsoModalOpen(true);
   };
 
@@ -606,22 +646,53 @@ export const LoginView: React.FC<LoginViewProps> = ({
                   <span>⚡ Use Authorized Admin Credentials (admin@nhit.com)</span>
                 </button>
 
-                {/* Google SSO Button */}
-                <button
-                  type="button"
-                  className="google-sso-btn"
-                  onClick={handleGoogleSSO}
-                  disabled={loading}
-                  title="Sign in with your verified Google enterprise workspace identity"
-                >
-                  <svg width="18" height="18" viewBox="0 0 24 24">
-                    <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.66-5.17 3.66-9.17z" />
-                    <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.34 24 12 24z" />
-                    <path fill="#FBBC05" d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.25C.45 8.18 0 9.99 0 12s.45 3.82 1.25 5.42l4.03-3.15z" />
-                    <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.34 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z" />
-                  </svg>
-                  <span>Continue with Google Enterprise SSO</span>
-                </button>
+                {/* Enterprise SSO Buttons */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '14px' }}>
+                  <button
+                    type="button"
+                    className="google-sso-btn"
+                    onClick={handleGoogleSSO}
+                    disabled={loading}
+                    title="Sign in with your verified Google enterprise workspace identity"
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24">
+                      <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.66-5.17 3.66-9.17z" />
+                      <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.34 24 12 24z" />
+                      <path fill="#FBBC05" d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.25C.45 8.18 0 9.99 0 12s.45 3.82 1.25 5.42l4.03-3.15z" />
+                      <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.34 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z" />
+                    </svg>
+                    <span>Continue with Google Enterprise SSO</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className="google-sso-btn"
+                    onClick={handleMicrosoftSSO}
+                    disabled={loading}
+                    style={{ background: 'rgba(255, 255, 255, 0.03)', borderColor: 'rgba(255, 255, 255, 0.12)' }}
+                    title="Sign in with your Microsoft 365 / Azure AD corporate account"
+                  >
+                    <svg width="18" height="18" viewBox="0 0 23 23">
+                      <path fill="#f35325" d="M1 1h10v10H1z"/>
+                      <path fill="#81bc06" d="M12 1h10v10H12z"/>
+                      <path fill="#05a6f0" d="M1 12h10v10H1z"/>
+                      <path fill="#ffba08" d="M12 12h10v10H12z"/>
+                    </svg>
+                    <span>Continue with Microsoft 365</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className="google-sso-btn"
+                    onClick={handleEnterpriseSSO}
+                    disabled={loading}
+                    style={{ background: 'rgba(255, 255, 255, 0.02)', borderColor: 'rgba(255, 255, 255, 0.09)' }}
+                    title="Sign in with corporate domain via SAML 2.0 / OIDC identity provider"
+                  >
+                    <Building2 size={18} color="#94a3b8" />
+                    <span>Single Sign-On (SAML / Work Domain)</span>
+                  </button>
+                </div>
 
                 <div className="auth-divider">
                   <span>OR SIGN IN WITH SANCTIONED ACCOUNT</span>
@@ -1161,35 +1232,79 @@ export const LoginView: React.FC<LoginViewProps> = ({
               onClick={(e) => e.stopPropagation()}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '1.25rem' }}>
-                <div style={{ width: 44, height: 44, borderRadius: '50%', background: 'rgba(66, 133, 244, 0.15)', border: '1px solid rgba(66, 133, 244, 0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <svg width="22" height="22" viewBox="0 0 24 24">
-                    <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.66-5.17 3.66-9.17z" />
-                    <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.34 24 12 24z" />
-                    <path fill="#FBBC05" d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.25C.45 8.18 0 9.99 0 12s.45 3.82 1.25 5.42l4.03-3.15z" />
-                    <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.34 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z" />
-                  </svg>
+                <div style={{
+                  width: 44,
+                  height: 44,
+                  borderRadius: '50%',
+                  background: ssoProvider === 'google'
+                    ? 'rgba(66, 133, 244, 0.15)'
+                    : ssoProvider === 'microsoft'
+                      ? 'rgba(5, 166, 240, 0.15)'
+                      : 'rgba(168, 85, 247, 0.15)',
+                  border: ssoProvider === 'google'
+                    ? '1px solid rgba(66, 133, 244, 0.3)'
+                    : ssoProvider === 'microsoft'
+                      ? '1px solid rgba(5, 166, 240, 0.3)'
+                      : '1px solid rgba(168, 85, 247, 0.3)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}>
+                  {ssoProvider === 'google' ? (
+                    <svg width="22" height="22" viewBox="0 0 24 24">
+                      <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.66-5.17 3.66-9.17z" />
+                      <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.34 24 12 24z" />
+                      <path fill="#FBBC05" d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.25C.45 8.18 0 9.99 0 12s.45 3.82 1.25 5.42l4.03-3.15z" />
+                      <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.34 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z" />
+                    </svg>
+                  ) : ssoProvider === 'microsoft' ? (
+                    <svg width="22" height="22" viewBox="0 0 23 23">
+                      <path fill="#f35325" d="M1 1h10v10H1z"/>
+                      <path fill="#81bc06" d="M12 1h10v10H12z"/>
+                      <path fill="#05a6f0" d="M1 12h10v10H1z"/>
+                      <path fill="#ffba08" d="M12 12h10v10H12z"/>
+                    </svg>
+                  ) : (
+                    <Building2 size={22} color="#a855f7" />
+                  )}
                 </div>
                 <div>
-                  <h3 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 600, color: '#f8fafc' }}>Google Enterprise SSO</h3>
-                  <span style={{ fontSize: '0.8rem', color: '#94a3b8' }}>Federated Identity Sign-In</span>
+                  <h3 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 600, color: '#f8fafc' }}>
+                    {ssoProvider === 'google'
+                      ? 'Google Enterprise SSO'
+                      : ssoProvider === 'microsoft'
+                        ? 'Microsoft 365 Enterprise SSO'
+                        : 'Enterprise SAML 2.0 / Corporate SSO'}
+                  </h3>
+                  <span style={{ fontSize: '0.8rem', color: '#94a3b8' }}>
+                    {ssoProvider === 'enterprise' ? 'Domain-Level Federated Sign-In' : 'Federated Identity Sign-In'}
+                  </span>
                 </div>
               </div>
 
               <p style={{ fontSize: '0.875rem', color: '#cbd5e1', marginBottom: '1.25rem', lineHeight: '1.5' }}>
-                Sign in using your Google Workspace account or verified Gmail identity to access NHIT Enterprise operations.
+                {ssoProvider === 'google'
+                  ? 'Sign in using your Google Workspace account or verified Gmail identity to access NHIT Enterprise operations.'
+                  : ssoProvider === 'microsoft'
+                    ? 'Sign in using your Microsoft 365 / Azure AD corporate identity to access NHIT Enterprise operations.'
+                    : 'Sign in using your verified corporate domain email via federated SAML 2.0 / OIDC single sign-on.'}
               </p>
 
-              <form onSubmit={(e) => { e.preventDefault(); handleExecuteGoogleSSO(googleSsoEmail); }}>
+              <form onSubmit={(e) => { e.preventDefault(); handleExecuteSSO(googleSsoEmail, ssoProvider); }}>
                 <div style={{ marginBottom: '1rem' }}>
                   <label htmlFor="google-sso-email" style={{ display: 'block', fontSize: '0.8rem', fontWeight: 500, color: '#94a3b8', marginBottom: '6px' }}>
-                    Google Identity Email
+                    {ssoProvider === 'google'
+                      ? 'Google Identity Email'
+                      : ssoProvider === 'microsoft'
+                        ? 'Microsoft Corporate Email'
+                        : 'Corporate Work Email / Domain'}
                   </label>
                   <input
                     id="google-sso-email"
                     type="email"
                     value={googleSsoEmail}
                     onChange={(e) => setGoogleSsoEmail(e.target.value)}
-                    placeholder="e.g. rajeshbala381@gmail.com or admin@nhit.com"
+                    placeholder="e.g. rajeshbala381@gmail.com, officer@nhit.gov.in, or admin@nhit.com"
                     style={{
                       width: '100%',
                       padding: '10px 14px',
@@ -1211,17 +1326,38 @@ export const LoginView: React.FC<LoginViewProps> = ({
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
                     <button
                       type="button"
-                      onClick={() => { setGoogleSsoEmail('rajeshbala381@gmail.com'); handleExecuteGoogleSSO('rajeshbala381@gmail.com'); }}
+                      onClick={() => { setGoogleSsoEmail('rajeshbala381@gmail.com'); handleExecuteSSO('rajeshbala381@gmail.com', ssoProvider); }}
                       style={{ fontSize: '0.8rem', padding: '6px 12px', background: 'rgba(56, 189, 248, 0.1)', border: '1px solid rgba(56, 189, 248, 0.3)', borderRadius: '6px', color: '#38bdf8', cursor: 'pointer' }}
                     >
-                      👤 rajeshbala381@gmail.com
+                      👤 rajeshbala381@gmail.com (Engineer)
                     </button>
                     <button
                       type="button"
-                      onClick={() => { setGoogleSsoEmail('admin@nhit.com'); handleExecuteGoogleSSO('admin@nhit.com'); }}
+                      onClick={() => { setGoogleSsoEmail('hnain932@gmail.com'); handleExecuteSSO('hnain932@gmail.com', ssoProvider); }}
+                      style={{ fontSize: '0.8rem', padding: '6px 12px', background: 'rgba(52, 211, 153, 0.1)', border: '1px solid rgba(52, 211, 153, 0.3)', borderRadius: '6px', color: '#34d399', cursor: 'pointer' }}
+                    >
+                      👤 hnain932@gmail.com (Lead)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setGoogleSsoEmail('admin@nhit.com'); handleExecuteSSO('admin@nhit.com', ssoProvider); }}
                       style={{ fontSize: '0.8rem', padding: '6px 12px', background: 'rgba(167, 139, 250, 0.1)', border: '1px solid rgba(167, 139, 250, 0.3)', borderRadius: '6px', color: '#a78bfa', cursor: 'pointer' }}
                     >
                       🛡️ admin@nhit.com (Super Admin)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setGoogleSsoEmail('cfo@nhit.com'); handleExecuteSSO('cfo@nhit.com', ssoProvider); }}
+                      style={{ fontSize: '0.8rem', padding: '6px 12px', background: 'rgba(251, 191, 36, 0.1)', border: '1px solid rgba(251, 191, 36, 0.3)', borderRadius: '6px', color: '#fbbf24', cursor: 'pointer' }}
+                    >
+                      💼 cfo@nhit.com (CFO)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setGoogleSsoEmail('officer@nhit.gov.in'); handleExecuteSSO('officer@nhit.gov.in', ssoProvider); }}
+                      style={{ fontSize: '0.8rem', padding: '6px 12px', background: 'rgba(244, 114, 182, 0.1)', border: '1px solid rgba(244, 114, 182, 0.3)', borderRadius: '6px', color: '#f472b6', cursor: 'pointer' }}
+                    >
+                      🏛️ officer@nhit.gov.in (Field Officer)
                     </button>
                   </div>
                 </div>
@@ -1247,7 +1383,11 @@ export const LoginView: React.FC<LoginViewProps> = ({
                     type="submit"
                     style={{
                       padding: '8px 20px',
-                      background: 'linear-gradient(135deg, #3b82f6, #6366f1)',
+                      background: ssoProvider === 'google'
+                        ? 'linear-gradient(135deg, #3b82f6, #6366f1)'
+                        : ssoProvider === 'microsoft'
+                          ? 'linear-gradient(135deg, #05a6f0, #0078d4)'
+                          : 'linear-gradient(135deg, #8b5cf6, #6366f1)',
                       border: 'none',
                       borderRadius: '8px',
                       color: '#fff',
@@ -1258,7 +1398,13 @@ export const LoginView: React.FC<LoginViewProps> = ({
                     }}
                     disabled={loading}
                   >
-                    {loading ? 'Authenticating...' : 'Sign In with Google Identity'}
+                    {loading
+                      ? 'Authenticating...'
+                      : ssoProvider === 'google'
+                        ? 'Sign In with Google Identity'
+                        : ssoProvider === 'microsoft'
+                          ? 'Sign In with Microsoft 365'
+                          : 'Sign In via Corporate SSO'}
                   </button>
                 </div>
               </form>

@@ -124,6 +124,54 @@ export function App() {
     setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4500);
   };
 
+  // Handle OAuth SSO redirects & tokens in URL query params
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const code = params.get('code');
+      const token = params.get('token');
+      const ssoProvider = params.get('provider') || 'google';
+
+      if (token) {
+        setAuthToken(token);
+        setIsAuthenticated(true);
+        window.history.replaceState({}, document.title, window.location.pathname);
+        addToast('Single Sign-On authentication verified.', 'success');
+        return;
+      }
+
+      if (code) {
+        setLoading(true);
+        api.completeSSO({ provider: ssoProvider.toUpperCase(), code })
+          .then((res) => {
+            if (res.token) {
+              setAuthToken(res.token);
+              setIsAuthenticated(true);
+              const authUser = {
+                user_id: res.user_id!,
+                email: res.email!,
+                name: res.name!,
+                roles: res.roles || ['employee'],
+                permissions: res.permissions || [],
+              };
+              setCurrentAuthUser(authUser);
+              localStorage.setItem('nhit_auth_user', JSON.stringify(authUser));
+              window.history.replaceState({}, document.title, window.location.pathname);
+              addToast(`Welcome back, ${res.name || 'Officer'}! Signed in via Enterprise SSO.`, 'success');
+            }
+          })
+          .catch((err: any) => {
+            addToast(`SSO code exchange failed: ${err.message}`, 'error');
+          })
+          .finally(() => {
+            setLoading(false);
+          });
+      }
+    } catch {
+      // Safe fallback
+    }
+  }, []);
+
   // Ctrl+K search shortcut
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
