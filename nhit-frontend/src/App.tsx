@@ -49,17 +49,31 @@ interface Toast {
 
 export function App() {
   // Authentication & Portal state
+  const [currentAuthUser, setCurrentAuthUser] = useState<AuthUser | null>(() => {
+    const token = getAuthToken();
+    if (!token) return null;
+    const saved = localStorage.getItem('nhit_auth_user');
+    if (!saved) {
+      setAuthToken(null);
+      return null;
+    }
+    try {
+      return JSON.parse(saved);
+    } catch {
+      setAuthToken(null);
+      localStorage.removeItem('nhit_auth_user');
+      return null;
+    }
+  });
+
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
-    return Boolean(getAuthToken());
+    const token = getAuthToken();
+    const saved = localStorage.getItem('nhit_auth_user');
+    return Boolean(token && saved);
   });
   const [portalMode, setPortalMode] = useState<'admin' | 'user'>('admin');
   const [landingViewMode, setLandingViewMode] = useState<'landing' | 'login'>('landing');
   const [initialLoginMode, setInitialLoginMode] = useState<'admin' | 'user'>('admin');
-  const [currentAuthUser, setCurrentAuthUser] = useState<AuthUser | null>(() => {
-    if (!getAuthToken()) return null;
-    const saved = localStorage.getItem('nhit_auth_user');
-    return saved ? JSON.parse(saved) : null;
-  });
 
   // Tab IDs match the Sidebar nav item IDs exactly
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -298,10 +312,10 @@ export function App() {
   }, [selectedOrgId]);
 
   useEffect(() => {
-    if (isAuthenticated) {
+    if (isAuthenticated && currentAuthUser && landingViewMode === 'landing') {
       loadData();
     }
-  }, [isAuthenticated, loadData]);
+  }, [isAuthenticated, currentAuthUser, landingViewMode, loadData]);
 
   // ---- Action Handlers ----
   const handleApproveGreenNote = async (id: string, status: string, remarks: string) => {
@@ -421,6 +435,7 @@ export function App() {
     setIsAuthenticated(true);
     setPortalMode(user.portalMode);
     setActiveTab(user.portalMode === 'admin' ? 'dashboard' : 'userportal');
+    setLandingViewMode('landing');
     const roleTitle = user.roles[0] ? user.roles[0].replace(/_/g, ' ').toUpperCase() : 'OFFICER';
     const methodBadge =
       user.auth_method === 'google_sso'
