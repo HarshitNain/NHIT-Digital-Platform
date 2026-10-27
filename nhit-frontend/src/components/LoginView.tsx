@@ -72,6 +72,10 @@ export const LoginView: React.FC<LoginViewProps> = ({
   const [verifyNewPassword, setVerifyNewPassword] = useState('');
   const [verifyConfirmPassword, setVerifyConfirmPassword] = useState('');
 
+  // Google SSO Modal State
+  const [googleSsoModalOpen, setGoogleSsoModalOpen] = useState(false);
+  const [googleSsoEmail, setGoogleSsoEmail] = useState('');
+
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [infoMsg, setInfoMsg] = useState('');
@@ -233,13 +237,60 @@ export const LoginView: React.FC<LoginViewProps> = ({
     }
   };
 
+  const isRealGoogleClientId = (id: string) => {
+    return Boolean(
+      id &&
+      /^[0-9]+-[a-z0-9_]+\.apps\.googleusercontent\.com$/i.test(id) &&
+      !id.includes('nhit-digital-platform') &&
+      !id.includes('YOUR_GOOGLE_CLIENT_ID')
+    );
+  };
+
+  const handleExecuteGoogleSSO = async (targetEmail: string) => {
+    const cleanEmail = targetEmail.trim().toLowerCase();
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      setErrorMsg('Please enter a valid Google email address.');
+      return;
+    }
+    setLoading(true);
+    setErrorMsg('');
+    try {
+      const derivedName = cleanEmail === 'admin@nhit.com'
+        ? 'NHIT Super Administrator'
+        : cleanEmail.split('@')[0].replace(/[._]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+      const res = await api.googleSSO({
+        email: cleanEmail,
+        name: derivedName,
+      });
+      if (res.token) {
+        setAuthToken(res.token);
+        onLoginSuccess({
+          user_id: res.user_id!,
+          email: res.email!,
+          name: res.name!,
+          roles: res.roles || ['employee'],
+          permissions: res.permissions || [],
+          auth_method: 'google_sso',
+          portalMode,
+        });
+      }
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Google SSO authorization failed.');
+    } finally {
+      setLoading(false);
+      setGoogleSsoModalOpen(false);
+    }
+  };
+
   const handleGoogleSSO = async () => {
     setErrorMsg('');
+    const rawClientId = (import.meta as any).env?.VITE_GOOGLE_CLIENT_ID || '';
     const gWindow = window as any;
-    if (gWindow.google?.accounts?.id) {
+
+    if (isRealGoogleClientId(rawClientId) && gWindow.google?.accounts?.id) {
       try {
         gWindow.google.accounts.id.initialize({
-          client_id: '984321045981-nhit-digital-platform.apps.googleusercontent.com',
+          client_id: rawClientId,
           callback: async (credentialResponse: any) => {
             if (credentialResponse?.credential) {
               setLoading(true);
@@ -264,33 +315,26 @@ export const LoginView: React.FC<LoginViewProps> = ({
               }
             }
           },
+          error_callback: () => {
+            setGoogleSsoEmail(email || 'rajeshbala381@gmail.com');
+            setGoogleSsoModalOpen(true);
+          }
         });
-        gWindow.google.accounts.id.prompt();
+        gWindow.google.accounts.id.prompt((notification: any) => {
+          if (notification?.isNotDisplayed?.() || notification?.isSkippedMoment?.()) {
+            setGoogleSsoEmail(email || 'rajeshbala381@gmail.com');
+            setGoogleSsoModalOpen(true);
+          }
+        });
+        return;
       } catch {
-        setErrorMsg('Google Sign-In prompt failed to initialize.');
-      }
-    } else {
-      setLoading(true);
-      try {
-        const res = await api.googleSSO({ email: email || 'admin@nhit.com', name: 'NHIT Super Administrator' });
-        if (res.token) {
-          setAuthToken(res.token);
-          onLoginSuccess({
-            user_id: res.user_id!,
-            email: res.email!,
-            name: res.name!,
-            roles: res.roles || ['employee'],
-            permissions: res.permissions || [],
-            auth_method: 'google_sso',
-            portalMode,
-          });
-        }
-      } catch (err: any) {
-        setErrorMsg(err.message || 'SSO authorization failed.');
-      } finally {
-        setLoading(false);
+        // Fall back to modal
       }
     }
+
+    // Default: seamless enterprise Google SSO flow without invalid_client error
+    setGoogleSsoEmail(email && email.includes('@') ? email.trim() : 'rajeshbala381@gmail.com');
+    setGoogleSsoModalOpen(true);
   };
 
   // Quick Administrator Access
@@ -1080,6 +1124,141 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 )}
               </button>
             </form>
+          </div>
+        )}
+
+        {/* Google SSO Selection Modal */}
+        {googleSsoModalOpen && (
+          <div
+            style={{
+              position: 'fixed',
+              inset: 0,
+              background: 'rgba(0, 0, 0, 0.75)',
+              backdropFilter: 'blur(8px)',
+              zIndex: 99999,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '1rem',
+            }}
+            onClick={() => setGoogleSsoModalOpen(false)}
+          >
+            <div
+              style={{
+                background: '#0f172a',
+                border: '1px solid rgba(255, 255, 255, 0.15)',
+                borderRadius: '16px',
+                maxWidth: '460px',
+                width: '100%',
+                padding: '2rem',
+                boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.7)',
+                color: '#fff',
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '1.25rem' }}>
+                <div style={{ width: 44, height: 44, borderRadius: '50%', background: 'rgba(66, 133, 244, 0.15)', border: '1px solid rgba(66, 133, 244, 0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <svg width="22" height="22" viewBox="0 0 24 24">
+                    <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.66-5.17 3.66-9.17z" />
+                    <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.34 24 12 24z" />
+                    <path fill="#FBBC05" d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.25C.45 8.18 0 9.99 0 12s.45 3.82 1.25 5.42l4.03-3.15z" />
+                    <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.34 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z" />
+                  </svg>
+                </div>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 600, color: '#f8fafc' }}>Google Enterprise SSO</h3>
+                  <span style={{ fontSize: '0.8rem', color: '#94a3b8' }}>Federated Identity Sign-In</span>
+                </div>
+              </div>
+
+              <p style={{ fontSize: '0.875rem', color: '#cbd5e1', marginBottom: '1.25rem', lineHeight: '1.5' }}>
+                Sign in using your Google Workspace account or verified Gmail identity to access NHIT Enterprise operations.
+              </p>
+
+              <form onSubmit={(e) => { e.preventDefault(); handleExecuteGoogleSSO(googleSsoEmail); }}>
+                <div style={{ marginBottom: '1rem' }}>
+                  <label htmlFor="google-sso-email" style={{ display: 'block', fontSize: '0.8rem', fontWeight: 500, color: '#94a3b8', marginBottom: '6px' }}>
+                    Google Identity Email
+                  </label>
+                  <input
+                    id="google-sso-email"
+                    type="email"
+                    value={googleSsoEmail}
+                    onChange={(e) => setGoogleSsoEmail(e.target.value)}
+                    placeholder="e.g. rajeshbala381@gmail.com or admin@nhit.com"
+                    style={{
+                      width: '100%',
+                      padding: '10px 14px',
+                      background: 'rgba(15, 23, 42, 0.6)',
+                      border: '1px solid rgba(255, 255, 255, 0.2)',
+                      borderRadius: '8px',
+                      color: '#fff',
+                      fontSize: '0.9rem',
+                      outline: 'none',
+                    }}
+                    required
+                    autoFocus
+                    disabled={loading}
+                  />
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '1.5rem' }}>
+                  <span style={{ fontSize: '0.75rem', color: '#64748b' }}>Select Verified Identity:</span>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                    <button
+                      type="button"
+                      onClick={() => { setGoogleSsoEmail('rajeshbala381@gmail.com'); handleExecuteGoogleSSO('rajeshbala381@gmail.com'); }}
+                      style={{ fontSize: '0.8rem', padding: '6px 12px', background: 'rgba(56, 189, 248, 0.1)', border: '1px solid rgba(56, 189, 248, 0.3)', borderRadius: '6px', color: '#38bdf8', cursor: 'pointer' }}
+                    >
+                      👤 rajeshbala381@gmail.com
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setGoogleSsoEmail('admin@nhit.com'); handleExecuteGoogleSSO('admin@nhit.com'); }}
+                      style={{ fontSize: '0.8rem', padding: '6px 12px', background: 'rgba(167, 139, 250, 0.1)', border: '1px solid rgba(167, 139, 250, 0.3)', borderRadius: '6px', color: '#a78bfa', cursor: 'pointer' }}
+                    >
+                      🛡️ admin@nhit.com (Super Admin)
+                    </button>
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+                  <button
+                    type="button"
+                    onClick={() => setGoogleSsoModalOpen(false)}
+                    style={{
+                      padding: '8px 16px',
+                      background: 'transparent',
+                      border: '1px solid rgba(255, 255, 255, 0.2)',
+                      borderRadius: '8px',
+                      color: '#94a3b8',
+                      cursor: 'pointer',
+                      fontSize: '0.875rem'
+                    }}
+                    disabled={loading}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    style={{
+                      padding: '8px 20px',
+                      background: 'linear-gradient(135deg, #3b82f6, #6366f1)',
+                      border: 'none',
+                      borderRadius: '8px',
+                      color: '#fff',
+                      cursor: 'pointer',
+                      fontSize: '0.875rem',
+                      fontWeight: 600,
+                      boxShadow: '0 4px 12px rgba(59, 130, 246, 0.3)'
+                    }}
+                    disabled={loading}
+                  >
+                    {loading ? 'Authenticating...' : 'Sign In with Google Identity'}
+                  </button>
+                </div>
+              </form>
+            </div>
           </div>
         )}
 

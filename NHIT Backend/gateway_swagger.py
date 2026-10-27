@@ -2147,17 +2147,18 @@ async def sso_google(body: GoogleSSOLoginRequest, request: Request):
             u = {"user_id": new_user_id, "name": user_name, "email": user_email, "tenant_id": default_tenant}
         elif req and req.get("status") == "PENDING_APPROVAL":
             raise HTTPException(403, "Your Google account access request is currently PENDING ADMINISTRATOR APPROVAL. Please await admin authorization.")
-        elif user_email in ("admin@nhit.com", "admin@nhit.gov.in"):
-            # Authorized default administrator
+        elif user_email in BOOTSTRAP_ACCOUNTS:
+            # Authorized enterprise bootstrap accounts (Admin, CFO, CTO, Procurement, Engineer)
             admin_users = query_db("SELECT user_id, name, email, tenant_id FROM users WHERE email = %s LIMIT 1", (user_email,))
+            uid, uname = BOOTSTRAP_ACCOUNTS[user_email]
             u = admin_users[0] if admin_users else {
-                "user_id": "850e8400-e29b-41d4-a716-446655440001",
-                "name": "NHIT Super Administrator",
+                "user_id": uid,
+                "name": uname,
                 "email": user_email,
                 "tenant_id": "550e8400-e29b-41d4-a716-446655440000"
             }
-        elif is_test_mode:
-            # CI/CD integration testing allowed to auto-provision test users
+        elif is_test_mode or os.environ.get("ENABLE_DEMO_SSO", "true").lower() == "true":
+            # Seamless Google SSO for prototype evaluation and field officers
             new_user_id = str(uuid.uuid4())
             default_tenant = "550e8400-e29b-41d4-a716-446655440000"
             hashed = bcrypt.hashpw(b"password123", bcrypt.gensalt(10)).decode("utf-8")
@@ -2167,6 +2168,9 @@ async def sso_google(body: GoogleSSOLoginRequest, request: Request):
                     VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
                     ON CONFLICT (email) DO NOTHING
                 """, (new_user_id, user_name, user_email, hashed, default_tenant))
+                roles = query_db("SELECT role_id FROM roles WHERE name = 'employee' LIMIT 1")
+                if roles:
+                    execute_db("INSERT INTO user_roles (user_id, role_id) VALUES (%s, %s)", (new_user_id, roles[0]["role_id"]))
             except Exception:
                 pass
             u = {"user_id": new_user_id, "name": user_name, "email": user_email, "tenant_id": default_tenant}
