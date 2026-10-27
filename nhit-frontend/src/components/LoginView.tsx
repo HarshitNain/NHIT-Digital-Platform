@@ -18,18 +18,10 @@ import {
   Building2,
 } from 'lucide-react';
 import { api, setAuthToken } from '../services/api';
-import type { LoginResponse } from '../types';
+import type { LoginResponse, AuthUser } from '../types';
 
 interface LoginViewProps {
-  onLoginSuccess: (user: {
-    user_id: string;
-    email: string;
-    name: string;
-    roles: string[];
-    permissions: string[];
-    auth_method?: 'password' | 'password_otp' | 'google_sso' | 'microsoft_sso' | 'enterprise_sso';
-    portalMode: 'admin' | 'user';
-  }) => void;
+  onLoginSuccess: (user: AuthUser) => void;
   onBackToProduct?: () => void;
   initialPortalMode?: 'admin' | 'user';
 }
@@ -282,13 +274,14 @@ export const LoginView: React.FC<LoginViewProps> = ({
 
       if (res.token) {
         setAuthToken(res.token);
+        const ssoMethod = provider === 'microsoft' ? 'microsoft_sso' : provider === 'enterprise' ? 'enterprise_sso' : 'google_sso';
         onLoginSuccess({
           user_id: res.user_id!,
           email: res.email!,
           name: res.name!,
           roles: res.roles || ['employee'],
           permissions: res.permissions || [],
-          auth_method: `${provider}_sso` as any,
+          auth_method: ssoMethod,
           portalMode,
         });
       }

@@ -10,6 +10,7 @@ import type {
   Designation,
   ReimbursementNote,
   ServiceHealth,
+  AuthUser,
 } from './types';
 import { api, getAuthToken, setAuthToken } from './services/api';
 import { Sidebar } from './components/Sidebar';
@@ -54,13 +55,7 @@ export function App() {
   const [portalMode, setPortalMode] = useState<'admin' | 'user'>('admin');
   const [landingViewMode, setLandingViewMode] = useState<'landing' | 'login'>('landing');
   const [initialLoginMode, setInitialLoginMode] = useState<'admin' | 'user'>('admin');
-  const [currentAuthUser, setCurrentAuthUser] = useState<{
-    user_id: string;
-    email: string;
-    name: string;
-    roles: string[];
-    permissions: string[];
-  } | null>(() => {
+  const [currentAuthUser, setCurrentAuthUser] = useState<AuthUser | null>(() => {
     if (!getAuthToken()) return null;
     const saved = localStorage.getItem('nhit_auth_user');
     return saved ? JSON.parse(saved) : null;
@@ -147,12 +142,14 @@ export function App() {
             if (res.token) {
               setAuthToken(res.token);
               setIsAuthenticated(true);
-              const authUser = {
+              const authUser: AuthUser = {
                 user_id: res.user_id!,
                 email: res.email!,
                 name: res.name!,
                 roles: res.roles || ['employee'],
                 permissions: res.permissions || [],
+                auth_method: ssoProvider.toLowerCase() === 'microsoft' ? 'microsoft_sso' : 'google_sso',
+                portalMode: 'admin',
               };
               setCurrentAuthUser(authUser);
               localStorage.setItem('nhit_auth_user', JSON.stringify(authUser));
@@ -418,22 +415,23 @@ export function App() {
     }
   };
 
-  const handleLoginSuccess = (user: {
-    user_id: string;
-    email: string;
-    name: string;
-    roles: string[];
-    permissions: string[];
-    auth_method?: 'password' | 'password_otp' | 'google_sso';
-    portalMode: 'admin' | 'user';
-  }) => {
+  const handleLoginSuccess = (user: AuthUser) => {
     setCurrentAuthUser(user);
     localStorage.setItem('nhit_auth_user', JSON.stringify(user));
     setIsAuthenticated(true);
     setPortalMode(user.portalMode);
     setActiveTab(user.portalMode === 'admin' ? 'dashboard' : 'userportal');
     const roleTitle = user.roles[0] ? user.roles[0].replace(/_/g, ' ').toUpperCase() : 'OFFICER';
-    const methodBadge = user.auth_method === 'google_sso' ? ' (Google SSO)' : user.auth_method === 'password_otp' ? ' (2FA Verified)' : '';
+    const methodBadge =
+      user.auth_method === 'google_sso'
+        ? ' (Google SSO)'
+        : user.auth_method === 'microsoft_sso'
+        ? ' (Microsoft 365)'
+        : user.auth_method === 'enterprise_sso'
+        ? ' (SAML SSO)'
+        : user.auth_method === 'password_otp'
+        ? ' (2FA Verified)'
+        : '';
     setPersona({
       name: user.name,
       role: `${roleTitle}${methodBadge}`,
