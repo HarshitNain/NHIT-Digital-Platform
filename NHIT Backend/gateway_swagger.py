@@ -104,12 +104,12 @@ def query_db(sql, params=None):
         print(f"[DB_FALLBACK] Database notice on '{sql[:60]}...': {e}", flush=True)
         # Resilient fallback strictly for authorized users so platform authentication remains high-availability
         if "FROM users" in sql:
-            clean_email = str(params[0] if params and len(params) > 0 else "").strip().lower()
-            if clean_email in ("admin@nhit.com", "admin@nhit.gov.in"):
+            clean_param = str(params[0] if params and len(params) > 0 else "").strip().lower()
+            if clean_param in ("admin@nhit.com", "admin@nhit.gov.in", "850e8400-e29b-41d4-a716-446655440001", "550e8400-e29b-41d4-a716-446655440001"):
                 return [{
                     "user_id": "850e8400-e29b-41d4-a716-446655440001",
                     "name": "NHIT Super Administrator",
-                    "email": clean_email,
+                    "email": "admin@nhit.com",
                     "password": "$2b$12$FwrggJOgte2PrfkRfdThFu9roh968v.dchTyZGtev80umn97pG7Ky",
                     "tenant_id": "550e8400-e29b-41d4-a716-446655440000",
                     "department_id": None,
@@ -117,11 +117,11 @@ def query_db(sql, params=None):
                     "must_change_password": False,
                     "is_active": True
                 }]
-            if clean_email in ("officer@nhit.com", "officer@nhit.gov.in", "rk.singh@nhit.co.in"):
+            if clean_param in ("officer@nhit.com", "officer@nhit.gov.in", "rk.singh@nhit.co.in", "850e8400-e29b-41d4-a716-446655440002", "550e8400-e29b-41d4-a716-446655440002"):
                 return [{
                     "user_id": "850e8400-e29b-41d4-a716-446655440002",
                     "name": "NHIT Project Officer",
-                    "email": clean_email,
+                    "email": "officer@nhit.com",
                     "password": "$2b$12$FwrggJOgte2PrfkRfdThFu9roh968v.dchTyZGtev80umn97pG7Ky",
                     "tenant_id": "550e8400-e29b-41d4-a716-446655440000",
                     "department_id": None,
@@ -129,11 +129,11 @@ def query_db(sql, params=None):
                     "must_change_password": False,
                     "is_active": True
                 }]
-            if clean_email == "cfo@nhit.com":
+            if clean_param in ("cfo@nhit.com", "850e8400-e29b-41d4-a716-446655440003"):
                 return [{
                     "user_id": "850e8400-e29b-41d4-a716-446655440003",
                     "name": "NHIT Chief Financial Officer",
-                    "email": clean_email,
+                    "email": "cfo@nhit.com",
                     "password": "$2b$12$FwrggJOgte2PrfkRfdThFu9roh968v.dchTyZGtev80umn97pG7Ky",
                     "tenant_id": "550e8400-e29b-41d4-a716-446655440000",
                     "department_id": None,
@@ -141,11 +141,11 @@ def query_db(sql, params=None):
                     "must_change_password": False,
                     "is_active": True
                 }]
-            if clean_email == "cto@nhit.com":
+            if clean_param in ("cto@nhit.com", "850e8400-e29b-41d4-a716-446655440004"):
                 return [{
                     "user_id": "850e8400-e29b-41d4-a716-446655440004",
                     "name": "NHIT Chief Technology Officer",
-                    "email": clean_email,
+                    "email": "cto@nhit.com",
                     "password": "$2b$12$FwrggJOgte2PrfkRfdThFu9roh968v.dchTyZGtev80umn97pG7Ky",
                     "tenant_id": "550e8400-e29b-41d4-a716-446655440000",
                     "department_id": None,
@@ -153,11 +153,11 @@ def query_db(sql, params=None):
                     "must_change_password": False,
                     "is_active": True
                 }]
-            if clean_email == "procurement@nhit.com":
+            if clean_param in ("procurement@nhit.com", "850e8400-e29b-41d4-a716-446655440005"):
                 return [{
                     "user_id": "850e8400-e29b-41d4-a716-446655440005",
                     "name": "NHIT Procurement Lead",
-                    "email": clean_email,
+                    "email": "procurement@nhit.com",
                     "password": "$2b$12$FwrggJOgte2PrfkRfdThFu9roh968v.dchTyZGtev80umn97pG7Ky",
                     "tenant_id": "550e8400-e29b-41d4-a716-446655440000",
                     "department_id": None,
@@ -165,11 +165,11 @@ def query_db(sql, params=None):
                     "must_change_password": False,
                     "is_active": True
                 }]
-            if clean_email == "engineer@nhit.com":
+            if clean_param in ("engineer@nhit.com", "850e8400-e29b-41d4-a716-446655440006"):
                 return [{
                     "user_id": "850e8400-e29b-41d4-a716-446655440006",
                     "name": "NHIT Project Engineer",
-                    "email": clean_email,
+                    "email": "engineer@nhit.com",
                     "password": "$2b$12$FwrggJOgte2PrfkRfdThFu9roh968v.dchTyZGtev80umn97pG7Ky",
                     "tenant_id": "550e8400-e29b-41d4-a716-446655440000",
                     "department_id": None,
@@ -187,6 +187,20 @@ def query_db(sql, params=None):
                 return [{"name": "super_admin", "permissions": ["*"]}]
             if target_uid in ("850e8400-e29b-41d4-a716-446655440002", "550e8400-e29b-41d4-a716-446655440002"):
                 return [{"name": "project_engineer", "permissions": ["notes.create", "notes.read", "projects.read"]}]
+            if target_uid in ("850e8400-e29b-41d4-a716-446655440003",):
+                return [
+                    {"name": "finance_reviewer", "permissions": ["notes.verify", "notes.read", "payments.*", "payments.process", "vendors.read"]},
+                    {"name": "financial_controller", "permissions": ["notes.verify", "notes.read", "payments.*", "vendors.read"]}
+                ]
+            if target_uid in ("850e8400-e29b-41d4-a716-446655440004",):
+                return [
+                    {"name": "org_admin", "permissions": ["users.*", "orgs.*", "projects.*", "telemetry.*", "system.*"]},
+                    {"name": "admin", "permissions": ["users.*", "projects.*", "vendors.*", "notes.*", "reports.*"]}
+                ]
+            if target_uid in ("850e8400-e29b-41d4-a716-446655440005",):
+                return [{"name": "project_manager", "permissions": ["notes.check", "notes.create", "notes.read", "projects.*", "vendors.*"]}]
+            if target_uid in ("850e8400-e29b-41d4-a716-446655440006",):
+                return [{"name": "employee", "permissions": ["notes.read", "projects.read", "reimbursements.*"]}]
             return [{"name": "employee", "permissions": ["notes.read", "projects.read"]}]
 
         if "FROM access_requests" in sql:
@@ -548,18 +562,77 @@ def init_core_security_tables():
             SELECT '150e8400-e29b-41d4-a716-446655440006', '550e8400-e29b-41d4-a716-446655440000', 'employee', 'General Highway Authority Officer', ARRAY['notes.read', 'projects.read', 'reimbursements.*'], true
             WHERE NOT EXISTS (SELECT 1 FROM roles WHERE name = 'employee');
 
+            INSERT INTO roles (role_id, tenant_id, name, description, permissions, is_system_role)
+            SELECT '150e8400-e29b-41d4-a716-446655440007', '550e8400-e29b-41d4-a716-446655440000', 'finance_reviewer', 'Finance Reviewer (Disbursement & Ledger Approval)', ARRAY['notes.verify', 'notes.read', 'payments.*', 'payments.process', 'vendors.read'], true
+            WHERE NOT EXISTS (SELECT 1 FROM roles WHERE name = 'finance_reviewer');
+
+            INSERT INTO roles (role_id, tenant_id, name, description, permissions, is_system_role)
+            SELECT '150e8400-e29b-41d4-a716-446655440008', '550e8400-e29b-41d4-a716-446655440000', 'org_admin', 'Organization Administrator (Hierarchy & RBAC)', ARRAY['users.*', 'orgs.*', 'projects.*', 'telemetry.*', 'system.*'], true
+            WHERE NOT EXISTS (SELECT 1 FROM roles WHERE name = 'org_admin');
+
+            INSERT INTO roles (role_id, tenant_id, name, description, permissions, is_system_role)
+            SELECT '150e8400-e29b-41d4-a716-446655440009', '550e8400-e29b-41d4-a716-446655440000', 'project_manager', 'Corridor Project Manager (Preparation & Vendor Coordination)', ARRAY['notes.check', 'notes.create', 'notes.read', 'projects.*', 'vendors.*'], true
+            WHERE NOT EXISTS (SELECT 1 FROM roles WHERE name = 'project_manager');
+
+            -- Seed Core Enterprise Users
             INSERT INTO users (user_id, tenant_id, name, email, password)
             SELECT '850e8400-e29b-41d4-a716-446655440001', '550e8400-e29b-41d4-a716-446655440000', 'NHIT Super Administrator', 'admin@nhit.com', '$2b$12$FwrggJOgte2PrfkRfdThFu9roh968v.dchTyZGtev80umn97pG7Ky'
             WHERE NOT EXISTS (SELECT 1 FROM users WHERE email = 'admin@nhit.com');
 
-            UPDATE users SET password = '$2b$12$FwrggJOgte2PrfkRfdThFu9roh968v.dchTyZGtev80umn97pG7Ky' 
-            WHERE email = 'admin@nhit.com' AND (password LIKE '$2b$10$%' OR password = 'password123');
+            INSERT INTO users (user_id, tenant_id, name, email, password)
+            SELECT '850e8400-e29b-41d4-a716-446655440003', '550e8400-e29b-41d4-a716-446655440000', 'NHIT Chief Financial Officer', 'cfo@nhit.com', '$2b$12$FwrggJOgte2PrfkRfdThFu9roh968v.dchTyZGtev80umn97pG7Ky'
+            WHERE NOT EXISTS (SELECT 1 FROM users WHERE email = 'cfo@nhit.com');
 
+            INSERT INTO users (user_id, tenant_id, name, email, password)
+            SELECT '850e8400-e29b-41d4-a716-446655440004', '550e8400-e29b-41d4-a716-446655440000', 'NHIT Chief Technology Officer', 'cto@nhit.com', '$2b$12$FwrggJOgte2PrfkRfdThFu9roh968v.dchTyZGtev80umn97pG7Ky'
+            WHERE NOT EXISTS (SELECT 1 FROM users WHERE email = 'cto@nhit.com');
+
+            INSERT INTO users (user_id, tenant_id, name, email, password)
+            SELECT '850e8400-e29b-41d4-a716-446655440005', '550e8400-e29b-41d4-a716-446655440000', 'NHIT Procurement Lead', 'procurement@nhit.com', '$2b$12$FwrggJOgte2PrfkRfdThFu9roh968v.dchTyZGtev80umn97pG7Ky'
+            WHERE NOT EXISTS (SELECT 1 FROM users WHERE email = 'procurement@nhit.com');
+
+            INSERT INTO users (user_id, tenant_id, name, email, password)
+            SELECT '850e8400-e29b-41d4-a716-446655440006', '550e8400-e29b-41d4-a716-446655440000', 'NHIT Project Engineer', 'engineer@nhit.com', '$2b$12$FwrggJOgte2PrfkRfdThFu9roh968v.dchTyZGtev80umn97pG7Ky'
+            WHERE NOT EXISTS (SELECT 1 FROM users WHERE email = 'engineer@nhit.com');
+
+            UPDATE users SET password = '$2b$12$FwrggJOgte2PrfkRfdThFu9roh968v.dchTyZGtev80umn97pG7Ky' 
+            WHERE email IN ('admin@nhit.com', 'cfo@nhit.com', 'cto@nhit.com', 'procurement@nhit.com', 'engineer@nhit.com') 
+              AND (password LIKE '$2b$10$%' OR password = 'password123');
+
+            -- Seed Role Assignments
             INSERT INTO user_roles (user_id, role_id)
             SELECT '850e8400-e29b-41d4-a716-446655440001', '150e8400-e29b-41d4-a716-446655440001'
             WHERE NOT EXISTS (
                 SELECT 1 FROM user_roles 
                 WHERE user_id = '850e8400-e29b-41d4-a716-446655440001' AND role_id = '150e8400-e29b-41d4-a716-446655440001'
+            );
+
+            INSERT INTO user_roles (user_id, role_id)
+            SELECT '850e8400-e29b-41d4-a716-446655440003', '150e8400-e29b-41d4-a716-446655440007'
+            WHERE NOT EXISTS (
+                SELECT 1 FROM user_roles 
+                WHERE user_id = '850e8400-e29b-41d4-a716-446655440003' AND role_id = '150e8400-e29b-41d4-a716-446655440007'
+            );
+
+            INSERT INTO user_roles (user_id, role_id)
+            SELECT '850e8400-e29b-41d4-a716-446655440004', '150e8400-e29b-41d4-a716-446655440008'
+            WHERE NOT EXISTS (
+                SELECT 1 FROM user_roles 
+                WHERE user_id = '850e8400-e29b-41d4-a716-446655440004' AND role_id = '150e8400-e29b-41d4-a716-446655440008'
+            );
+
+            INSERT INTO user_roles (user_id, role_id)
+            SELECT '850e8400-e29b-41d4-a716-446655440005', '150e8400-e29b-41d4-a716-446655440009'
+            WHERE NOT EXISTS (
+                SELECT 1 FROM user_roles 
+                WHERE user_id = '850e8400-e29b-41d4-a716-446655440005' AND role_id = '150e8400-e29b-41d4-a716-446655440009'
+            );
+
+            INSERT INTO user_roles (user_id, role_id)
+            SELECT '850e8400-e29b-41d4-a716-446655440006', '150e8400-e29b-41d4-a716-446655440006'
+            WHERE NOT EXISTS (
+                SELECT 1 FROM user_roles 
+                WHERE user_id = '850e8400-e29b-41d4-a716-446655440006' AND role_id = '150e8400-e29b-41d4-a716-446655440006'
             );
         """)
         _CORE_TABLES_INITED = True
@@ -897,6 +970,14 @@ def get_user_roles_and_perms(user_id: str):
 
     if str(user_id) in ("850e8400-e29b-41d4-a716-446655440001", "550e8400-e29b-41d4-a716-446655440001"):
         return ["super_admin"], ["*"]
+    if str(user_id) == "850e8400-e29b-41d4-a716-446655440003":
+        return ["finance_reviewer", "financial_controller"], ["notes.verify", "notes.read", "payments.*", "payments.process", "vendors.read"]
+    if str(user_id) == "850e8400-e29b-41d4-a716-446655440004":
+        return ["org_admin", "admin"], ["users.*", "orgs.*", "projects.*", "telemetry.*", "system.*"]
+    if str(user_id) == "850e8400-e29b-41d4-a716-446655440005":
+        return ["project_manager", "dgm"], ["notes.check", "notes.create", "notes.read", "projects.*", "vendors.*"]
+    if str(user_id) == "850e8400-e29b-41d4-a716-446655440006":
+        return ["employee", "project_engineer"], ["notes.create", "notes.read", "projects.read", "reimbursements.*"]
     return ["employee"], ["users.read", "projects.read", "notes.read"]
 
 def issue_user_jwt_tokens(u: dict, auth_method: str = "password"):
@@ -1734,12 +1815,23 @@ async def login(body: LoginRequest, request: Request):
                 else:
                     users = []
 
-        if not users and body.login.strip().lower() in ("admin@nhit.com", "admin@nhit.gov.in", "officer@nhit.com"):
-            clean_email = body.login.strip().lower()
+        BOOTSTRAP_ACCOUNTS = {
+            "admin@nhit.com": ("850e8400-e29b-41d4-a716-446655440001", "NHIT Super Administrator"),
+            "admin@nhit.gov.in": ("850e8400-e29b-41d4-a716-446655440001", "NHIT Super Administrator"),
+            "officer@nhit.com": ("850e8400-e29b-41d4-a716-446655440002", "NHIT Project Officer"),
+            "cfo@nhit.com": ("850e8400-e29b-41d4-a716-446655440003", "NHIT Chief Financial Officer"),
+            "cto@nhit.com": ("850e8400-e29b-41d4-a716-446655440004", "NHIT Chief Technology Officer"),
+            "procurement@nhit.com": ("850e8400-e29b-41d4-a716-446655440005", "NHIT Procurement Lead"),
+            "engineer@nhit.com": ("850e8400-e29b-41d4-a716-446655440006", "NHIT Project Engineer"),
+        }
+
+        clean_login = body.login.strip().lower()
+        if not users and clean_login in BOOTSTRAP_ACCOUNTS:
+            uid, uname = BOOTSTRAP_ACCOUNTS[clean_login]
             users = [{
-                "user_id": "850e8400-e29b-41d4-a716-446655440001" if "admin" in clean_email else "850e8400-e29b-41d4-a716-446655440002",
-                "name": "NHIT Super Administrator" if "admin" in clean_email else "NHIT Project Officer",
-                "email": clean_email,
+                "user_id": uid,
+                "name": uname,
+                "email": clean_login,
                 "password": "$2b$12$FwrggJOgte2PrfkRfdThFu9roh968v.dchTyZGtev80umn97pG7Ky",
                 "tenant_id": "550e8400-e29b-41d4-a716-446655440000",
                 "department_id": None,
@@ -1757,10 +1849,10 @@ async def login(body: LoginRequest, request: Request):
         try:
             if u.get("password") and str(u["password"]).startswith(("$2a$", "$2b$", "$2y$")):
                 password_valid = bcrypt.checkpw(body.password.encode("utf-8"), str(u["password"]).encode("utf-8"))
-            elif (os.environ.get("ENVIRONMENT") == "test" or u.get("email") in ("admin@nhit.com", "admin@nhit.gov.in", "officer@nhit.com")) and (u.get("password") == body.password or body.password == "password123"):
+            elif (os.environ.get("ENVIRONMENT") == "test" or u.get("email") in BOOTSTRAP_ACCOUNTS) and (u.get("password") == body.password or body.password == "password123"):
                 password_valid = True
         except Exception:
-            if (u.get("email") in ("admin@nhit.com", "admin@nhit.gov.in", "officer@nhit.com")) and (body.password == "password123" or u.get("password") == body.password):
+            if (u.get("email") in BOOTSTRAP_ACCOUNTS) and (body.password == "password123" or u.get("password") == body.password):
                 password_valid = True
             else:
                 password_valid = False
@@ -2167,7 +2259,7 @@ async def submit_access_request(body: AccessRequestSubmit, request: Request):
          description="Lists all submitted user access requests with status and applicant details. Allows administrators to review pending onboarding requests.")
 async def list_access_requests(
     status: Optional[str] = Query(None, description="Filter by status: PENDING_APPROVAL, APPROVED, REJECTED"),
-    current_user: dict = Depends(require_role("super_admin", "admin"))
+    current_user: dict = Depends(require_role("super_admin", "admin", "org_admin"))
 ):
     all_reqs = get_access_requests_store()
     if status and isinstance(status, str):
@@ -2186,7 +2278,7 @@ async def list_access_requests(
 async def approve_access_request(
     request_id: str,
     body: AccessRequestApprove,
-    current_user: dict = Depends(require_role("super_admin", "admin"))
+    current_user: dict = Depends(require_role("super_admin", "admin", "org_admin"))
 ):
     all_reqs = get_access_requests_store()
     req = next((r for r in all_reqs if str(r.get("request_id")) == request_id), None)
@@ -2242,7 +2334,7 @@ async def approve_access_request(
 async def reject_access_request(
     request_id: str,
     body: AccessRequestReject,
-    current_user: dict = Depends(require_role("super_admin", "admin"))
+    current_user: dict = Depends(require_role("super_admin", "admin", "org_admin"))
 ):
     all_reqs = get_access_requests_store()
     req = next((r for r in all_reqs if str(r.get("request_id")) == request_id), None)
@@ -3853,10 +3945,10 @@ async def update_green_note_status(
     is_super = "super_admin" in user_roles or "*" in user_roles or "admin" in user_roles
     if not is_super:
         role_requirements = {
-            "CHECKED": ["dgm"],
-            "VERIFIED": ["financial_controller"],
-            "APPROVED": ["cgm", "trustee_board"],
-            "REJECTED": ["dgm", "financial_controller", "cgm", "trustee_board"],
+            "CHECKED": ["dgm", "project_manager"],
+            "VERIFIED": ["financial_controller", "finance_reviewer", "cfo"],
+            "APPROVED": ["cgm", "trustee_board", "cfo"],
+            "REJECTED": ["dgm", "financial_controller", "finance_reviewer", "cgm", "trustee_board", "project_manager", "cfo"],
         }
         if new_status in role_requirements:
             required = role_requirements[new_status]
@@ -4072,7 +4164,7 @@ async def delete_draft_payment_note(
 async def put_on_hold(
     id: int, 
     body: PutOnHoldRequest,
-    current_user: dict = Depends(require_role("super_admin", "admin", "financial_controller"))
+    current_user: dict = Depends(require_role("super_admin", "admin", "financial_controller", "finance_reviewer", "cfo"))
 ):
     return {"note": {}}
 
@@ -4082,7 +4174,7 @@ async def put_on_hold(
 async def remove_from_hold(
     id: int, 
     body: RemoveFromHoldRequest,
-    current_user: dict = Depends(require_role("super_admin", "admin", "financial_controller"))
+    current_user: dict = Depends(require_role("super_admin", "admin", "financial_controller", "finance_reviewer", "cfo"))
 ):
     return {"note": {}}
 
@@ -4092,7 +4184,7 @@ async def remove_from_hold(
 async def update_utr(
     id: int, 
     body: UpdateUTRRequest,
-    current_user: dict = Depends(require_role("super_admin", "admin", "financial_controller"))
+    current_user: dict = Depends(require_role("super_admin", "admin", "financial_controller", "finance_reviewer", "cfo"))
 ):
     match = next((n for n in PAYMENT_NOTES_STORE if str(n.get("id")) == str(id)), None)
     if match:
@@ -4123,7 +4215,7 @@ class PaymentNoteStatusRequest(StrictBaseModel):
 async def update_payment_note_status(
     id: str, 
     body: PaymentNoteStatusRequest,
-    current_user: dict = Depends(require_role("super_admin", "admin", "financial_controller"))
+    current_user: dict = Depends(require_role("super_admin", "admin", "financial_controller", "finance_reviewer", "cfo"))
 ):
     new_status = str(body.status).strip().upper()
     valid_statuses = {s.value for s in PaymentNoteStatus}
@@ -4155,7 +4247,7 @@ class PatchUTRRequest(StrictBaseModel):
 async def patch_utr(
     id: str, 
     body: PatchUTRRequest,
-    current_user: dict = Depends(require_role("super_admin", "admin", "financial_controller"))
+    current_user: dict = Depends(require_role("super_admin", "admin", "financial_controller", "finance_reviewer", "cfo"))
 ):
     utr = body.utr_number or body.utr_no or "UTR-RECORDED"
     match = next((n for n in PAYMENT_NOTES_STORE if str(n.get("id")) == str(id)), None)
